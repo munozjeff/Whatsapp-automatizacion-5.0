@@ -39,6 +39,20 @@ export default function Automation({ activeTab }) {
   const fileInputRef = useRef(null);
 
   const [notifications, setNotifications] = useState([]);
+  const [expandedNotifs, setExpandedNotifs] = useState(new Set());
+
+  const toggleExpandNotif = (id, e) => {
+    if (e) e.stopPropagation();
+    setExpandedNotifs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   /* ── Fetch ───────────────────────────────── */
   const fetchAll = async () => {
@@ -426,37 +440,89 @@ export default function Automation({ activeTab }) {
           <div className="automation-sidebar">
 
             {/* Client Notifications Card */}
-            <div className="card" style={{ marginBottom: '16px', borderColor: notifications.length > 0 ? '#f59e0b' : 'inherit' }}>
-              <div className="card-header" style={{ background: notifications.length > 0 ? 'rgba(245, 158, 11, 0.1)' : 'transparent' }}>
-                <h3>🔔 Notificaciones de Clientes {notifications.length > 0 && <span className="badge badge-restricted">{notifications.length}</span>}</h3>
+            <div className="client-notif-card">
+              <div className="client-notif-header">
+                <h3>🔔 Notificaciones de Clientes</h3>
+                {notifications.length > 0 && <span className="client-notif-count">{notifications.length}</span>}
               </div>
               <div className="card-body no-pad">
                 {notifications.length === 0 ? (
-                  <div className="empty-state" style={{ padding: '16px', fontSize: '0.9em' }}>
+                  <div className="empty-state" style={{ padding: '20px 16px', fontSize: '0.88rem' }}>
                     <p>✅ No hay mensajes de clientes pendientes</p>
                   </div>
                 ) : (
-                  <div className="jobs-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                    {notifications.map((n) => (
-                      <div key={n.id} className="job-item" style={{ borderLeft: '3px solid #f59e0b' }}>
-                        <div className="job-header">
-                          <strong style={{ color: '#fff' }}>📱 {n.client_phone}</strong>
-                          <span className="table-sub">{n.account_id}</span>
+                  <div className="client-notif-list">
+                    {notifications.map((n) => {
+                      const isExpanded = expandedNotifs.has(n.id);
+                      const accountName = [n.account_first_name, n.account_last_name].filter(Boolean).join(' ');
+                      const receiverLabel = accountName 
+                        ? (n.account_phone ? `${accountName} (${n.account_phone})` : accountName)
+                        : (n.account_phone || (n.account_id && n.account_id !== '?' ? n.account_id : 'Sin identificar'));
+
+                      const shortTime = n.received_at ? n.received_at.slice(11, 16) : '';
+
+                      return (
+                        <div 
+                          key={n.id} 
+                          className={`client-notif-item ${isExpanded ? 'expanded' : ''}`}
+                          onClick={(e) => toggleExpandNotif(n.id, e)}
+                        >
+                          {/* Top Compact Header Bar */}
+                          <div className="client-notif-header-compact">
+                            <div className="client-notif-sender">
+                              <div className="client-notif-avatar">👤</div>
+                              <span title={n.client_phone || n.client_name}>
+                                {n.client_phone || n.client_name || 'Cliente'}
+                              </span>
+                            </div>
+
+                            <div className="client-notif-preview-msg">
+                              "{n.message_text}"
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {shortTime && (
+                                <span className="client-notif-time" style={{ fontSize: '0.72rem' }}>
+                                  🕒 {shortTime}
+                                </span>
+                              )}
+                              <span className="client-notif-chevron">▼</span>
+                            </div>
+                          </div>
+
+                          {/* Expanded Details Body */}
+                          {isExpanded && (
+                            <div className="client-notif-body-expanded" onClick={(e) => e.stopPropagation()}>
+                              <div className="client-notif-row">
+                                <div className="client-notif-receiver-badge" title={`ID Cuenta: ${n.account_id}`}>
+                                  <span>📥 Receptora:</span>
+                                  <strong>{receiverLabel}</strong>
+                                </div>
+                                <span className="client-notif-time">
+                                  🕒 {n.received_at?.slice(0, 16) || 'Reciente'}
+                                </span>
+                              </div>
+
+                              <div className="client-notif-bubble">
+                                💬 "{n.message_text}"
+                              </div>
+
+                              <div className="client-notif-footer" style={{ justifyContent: 'flex-end' }}>
+                                <button
+                                  className="client-notif-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    resolveNotification(n.id);
+                                  }}
+                                >
+                                  ✓ Marcar Atendido
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div style={{ fontSize: '0.85em', color: '#cbd5e1', margin: '4px 0' }}>
-                          "{n.message_text}"
-                        </div>
-                        <div className="job-actions" style={{ justifyContent: 'space-between' }}>
-                          <span className="table-sub">{n.received_at?.slice(11, 16)}</span>
-                          <button
-                            className="btn btn-sm btn-success"
-                            onClick={() => resolveNotification(n.id)}
-                          >
-                            ✓ Atendido
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

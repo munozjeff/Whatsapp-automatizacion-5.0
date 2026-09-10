@@ -187,6 +187,8 @@ class AutomationEngine:
         rest_time_minutes = profile.get("rest_time_minutes", 30)
         rest_time_seconds = rest_time_minutes * 60
         acc_sending_count = profile.get("accounts_for_sending", 5)
+        auto_reply_enabled = bool(profile.get("auto_reply_enabled", 0))
+        auto_reply_message = profile.get("auto_reply_message", "")
 
         campaigns = db.get_campaigns()
         campaign = next((c for c in campaigns if c["id"] == campaign_id), None)
@@ -310,7 +312,11 @@ class AutomationEngine:
                     try:
                         all_states = db.get_all_account_states()
                         peer_phones_set = {info["phone"] for info in all_states.values() if info.get("phone")}
-                        res_scan = runner.check_and_process_unread_chats(acc_id, peer_phones_set)
+                        res_scan = runner.check_and_process_unread_chats(
+                            acc_id, peer_phones_set,
+                            auto_reply_enabled=auto_reply_enabled,
+                            auto_reply_message=auto_reply_message
+                        )
                         if res_scan.get("notified_clients", 0) > 0:
                             print(f"[AutomationEngine] 🔔 {res_scan['notified_clients']} cliente(s) notificados en '{acc_id}'")
                     except Exception as scan_err:
@@ -454,7 +460,9 @@ class AutomationEngine:
                                         history_msgs_per_turn: int,
                                         warmup_phrases: list,
                                         blocked_history_accounts: set,
-                                        blocked_lock: threading.Lock) -> bool:
+                                        blocked_lock: threading.Lock,
+                                        auto_reply_enabled: bool = False,
+                                        auto_reply_message: str = "") -> bool:
         """
         Procesa una sola cuenta de historial en paralelo dentro de su tanda.
         Retorna True si completó correctamente, False si fue bloqueada o falló.
@@ -510,7 +518,11 @@ class AutomationEngine:
 
         # 1. Monitorear chats no leídos
         try:
-            res = runner.check_and_process_unread_chats(acc_id, peer_phones_set)
+            res = runner.check_and_process_unread_chats(
+                acc_id, peer_phones_set,
+                auto_reply_enabled=auto_reply_enabled,
+                auto_reply_message=auto_reply_message
+            )
             if res["notified_clients"] > 0:
                 print(f"[AutomationEngine] 🔔 {res['notified_clients']} cliente(s) notificados en '{acc_id}'")
         except Exception as scan_err:
@@ -619,6 +631,8 @@ class AutomationEngine:
         """
         acc_history_count = profile.get("accounts_for_history", 5)
         history_msgs_per_turn = profile.get("history_msgs_per_turn", 2)
+        auto_reply_enabled = bool(profile.get("auto_reply_enabled", 0))
+        auto_reply_message = profile.get("auto_reply_message", "")
         # Las cuentas de historial NO tienen tiempo de reposo: siempre disponibles.
 
         print(f"[AutomationEngine] 💬 Iniciando Tanda de Hacer Historial para Job #{job_id} — "
@@ -690,7 +704,9 @@ class AutomationEngine:
                             history_msgs_per_turn,
                             warmup_phrases,
                             blocked_history_accounts,
-                            blocked_lock
+                            blocked_lock,
+                            auto_reply_enabled,
+                            auto_reply_message
                         ),
                         daemon=True
                     )

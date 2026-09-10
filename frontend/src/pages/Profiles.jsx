@@ -21,6 +21,8 @@ export default function Profiles({ activeTab }) {
     accounts_for_sending: 5,
     accounts_for_history: 5,
     history_msgs_per_turn: 2,
+    auto_reply_enabled: 0,
+    auto_reply_message: '',
   });
 
   const { addToast } = useToast();
@@ -63,6 +65,8 @@ export default function Profiles({ activeTab }) {
         accounts_for_sending: profileToEdit.accounts_for_sending ?? 5,
         accounts_for_history: profileToEdit.accounts_for_history ?? 5,
         history_msgs_per_turn: profileToEdit.history_msgs_per_turn || 2,
+        auto_reply_enabled: profileToEdit.auto_reply_enabled ? 1 : 0,
+        auto_reply_message: profileToEdit.auto_reply_message || '',
       });
     } else {
       setEditingProfileId(null);
@@ -77,16 +81,18 @@ export default function Profiles({ activeTab }) {
         accounts_for_sending: 5,
         accounts_for_history: 5,
         history_msgs_per_turn: 2,
+        auto_reply_enabled: 0,
+        auto_reply_message: '',
       });
     }
     setShowModal(true);
   };
 
   const handleFormChange = (e) => {
-    const { name, value, type } = e.target;
+    const { name, value, type, checked } = e.target;
     setForm((prev) => ({
       ...prev,
-      [name]: type === 'number' ? Number(value) : value,
+      [name]: type === 'checkbox' ? (checked ? 1 : 0) : type === 'number' ? Number(value) : value,
     }));
   };
 
@@ -106,6 +112,10 @@ export default function Profiles({ activeTab }) {
     }
     if (form.accounts_for_sending < 0 || form.accounts_for_history < 0) {
       addToast('La cantidad de cuentas no puede ser negativa.', 'error');
+      return;
+    }
+    if (form.auto_reply_enabled && !form.auto_reply_message.trim()) {
+      addToast('Si activas la autorespuesta, debes escribir un mensaje de respuesta.', 'error');
       return;
     }
 
@@ -204,6 +214,11 @@ export default function Profiles({ activeTab }) {
                     ) : (
                       <span className="badge badge-history" style={{ fontSize: '0.75rem' }}>🔄 Multi ({prof.accounts_for_sending}E / {prof.accounts_for_history}H)</span>
                     )}
+                    {Boolean(prof.auto_reply_enabled) && (
+                      <span className="badge badge-available" style={{ fontSize: '0.75rem', backgroundColor: 'rgba(16, 185, 129, 0.2)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+                        🤖 Autorespuesta Activa
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -243,6 +258,17 @@ export default function Profiles({ activeTab }) {
                   </div>
                 </div>
               </div>
+
+              {Boolean(prof.auto_reply_enabled) && (
+                <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.1)' }}>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted, #94a3b8)', fontWeight: '600', marginBottom: '4px' }}>
+                    💬 Autorespuesta a Clientes:
+                  </div>
+                  <div style={{ fontSize: '0.85rem', fontStyle: 'italic', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    "{prof.auto_reply_message}"
+                  </div>
+                </div>
+              )}
 
               <div className="profile-footer">
                 <span className="meta-text">ID #{prof.id}</span>
@@ -441,6 +467,41 @@ export default function Profiles({ activeTab }) {
                       ⏱️ Tiempo mínimo que descansa cada cuenta de WhatsApp antes de repetir turno. La cuenta esperará a que hayan pasado todas las demás cuentas disponibles Y a que transcurra este descanso mínimo.
                     </small>
                   </div>
+                </div>
+
+                {/* Autorespuesta */}
+                <div className="form-section">
+                  <h4 className="form-section-title">🤖 Autorespuesta Automática (Clientes Exclusivos)</h4>
+                  <div className="form-group" style={{ marginBottom: '12px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: '600' }}>
+                      <input
+                        type="checkbox"
+                        name="auto_reply_enabled"
+                        checked={Boolean(form.auto_reply_enabled)}
+                        onChange={handleFormChange}
+                        style={{ width: '18px', height: '18px', accentColor: 'var(--primary-color, #6366f1)' }}
+                      />
+                      Habilitar Autorespuesta para mensajes de nuevos clientes
+                    </label>
+                    <small className="form-text" style={{ marginTop: '4px' }}>
+                      💡 Si está activo, cuando una cuenta detecte un mensaje de un cliente nuevo se enviará la autorespuesta. Se omite para cuentas del sistema e historial.
+                    </small>
+                  </div>
+
+                  {Boolean(form.auto_reply_enabled) && (
+                    <div className="form-group">
+                      <label>Mensaje de Autorespuesta:</label>
+                      <textarea
+                        name="auto_reply_message"
+                        className="form-control"
+                        rows="3"
+                        placeholder="Ej: ¡Hola! Gracias por escribirnos. Un asesor responderá a la brevedad..."
+                        value={form.auto_reply_message}
+                        onChange={handleFormChange}
+                        required={Boolean(form.auto_reply_enabled)}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Summary box */}

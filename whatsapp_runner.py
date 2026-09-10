@@ -87,6 +87,7 @@ class WhatsAppRunner:
             context.on("close", lambda ctx: self._handle_manual_close(account_id))
             apply_stealth_to_context(context)
             page: Page = context.pages[0] if context.pages else context.new_page()
+            page._account_id = account_id
 
             task_queue = queue.Queue()
             with self._lock:
@@ -214,6 +215,7 @@ class WhatsAppRunner:
             context.on("close", lambda ctx: self._handle_manual_close(account_id))
             apply_stealth_to_context(context)
             page: Page = context.pages[0] if context.pages else context.new_page()
+            page._account_id = account_id
 
             task_queue = queue.Queue()
             with self._lock:
@@ -664,19 +666,24 @@ class WhatsAppRunner:
 
         return phone_number
 
-    def check_and_process_unread_chats(self, account_id: str, peer_phones_set: set) -> dict:
+    def check_and_process_unread_chats(self, account_id: str, peer_phones_set: set, auto_reply_enabled: bool = False, auto_reply_message: str = "") -> dict:
         """
         Escanea chats no leídos en WhatsApp Web despachando la orden al hilo ejecutor.
         """
-        res = self._dispatch_to_instance(account_id, self._internal_check_unread, peer_phones_set, timeout=60)
+        res = self._dispatch_to_instance(account_id, self._internal_check_unread, account_id, peer_phones_set, auto_reply_enabled, auto_reply_message, timeout=60)
         if isinstance(res, dict):
             return res
         return {"replied_friends": 0, "notified_clients": 0}
 
-    def _internal_check_unread(self, page: Page, peer_phones_set: set) -> dict:
-        account_id = getattr(page, "_account_id", "?")
+    def _internal_check_unread(self, page: Page, account_id: str, peer_phones_set: set, auto_reply_enabled: bool = False, auto_reply_message: str = "") -> dict:
+        page._account_id = account_id
         replied_friends = 0
         notified_clients = 0
+
+        # Obtener dinámicamente los teléfonos Y nombres de todas las cuentas del sistema
+        system_phones = db.get_all_account_phone_digits()
+        system_names = db.get_all_account_contact_names()  # set de nombres lowercased
+        combined_peers = set(peer_phones_set or []) | system_phones
 
         try:
             # Volver al panel principal si estábamos en un chat individual
@@ -719,15 +726,31 @@ class WhatsAppRunner:
                         continue
 
                     clean_digits = re.sub(r'[^\d]', '', chat_name)
+                    chat_name_lower = chat_name.strip().lower()
 
-                    # Verificar si es cuenta amiga comparando dígitos
+                    # Verificar si es cuenta amiga o cuenta del sistema
                     is_friend = False
-                    if clean_digits:
-                        for peer in peer_phones_set:
-                            peer_digits = re.sub(r'[^\d]', '', peer)
+
+                    # Opción 1: comparar por dígitos de teléfono
+                    if not is_friend and clean_digits and len(clean_digits) >= 7:
+                        for peer_digits in combined_peers:
                             if peer_digits and (peer_digits in clean_digits or clean_digits in peer_digits):
                                 is_friend = True
                                 break
+
+                    # Opción 2: comparar por nombre de contacto asignado (first_name + last_name)
+                    if not is_friend:
+                        for sys_name in system_names:
+                            if sys_name and (sys_name in chat_name_lower or chat_name_lower in sys_name):
+                                is_friend = True
+                                print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por nombre en BD ('{sys_name}'). Omitiendo notificación cliente.")
+                                break
+
+                    # Opción 3: patrón de nombre autogenerado "NombreBanco ApellidoBanco NNNN"
+                    # Captura cuentas antiguas/reemplazadas que ya no están en BD
+                    if not is_friend and db.is_system_generated_name(chat_name):
+                        is_friend = True
+                        print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por patrón autogenerado. Omitiendo notificación cliente.")
 
                     # Abrir el chat haciendo clic en el row
                     try:
@@ -798,6 +821,28 @@ class WhatsAppRunner:
                             last_msg_text or "Nuevo mensaje no leído de cliente."
                         )
                         notified_clients += 1
+
+                        if auto_reply_enabled and auto_reply_message and auto_reply_message.strip():
+                            print(f"[{account_id}] 🤖 Autorespuesta activa para cliente ('{chat_name}'). Enviando...")
+                            compose = self._find_compose_input(page)
+                            if compose:
+                                compose.click()
+                                page.keyboard.type(auto_reply_message.strip(), delay=20)
+                                time.sleep(0.3)
+                                sent = False
+                                try:
+                                    send_btn = page.locator(
+                                        'button[aria-label*="Enviar"], button[aria-label*="Send"], '
+                                        'span[data-icon="send"]'
+                                    ).first
+                                    if send_btn.is_visible(timeout=1500):
+                                        send_btn.click()
+                                        sent = True
+                                except Exception:
+                                    pass
+                                if not sent:
+                                    compose.press("Enter")
+                                time.sleep(1)
 
                     # Cerrar chat
                     try:

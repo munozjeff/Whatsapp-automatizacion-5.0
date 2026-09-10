@@ -217,6 +217,8 @@ def manage_send_profiles():
         acc_sending = int(data.get("accounts_for_sending", 5))
         acc_history = int(data.get("accounts_for_history", 5))
         hist_msgs = int(data.get("history_msgs_per_turn", 2))
+        auto_reply_enabled = 1 if data.get("auto_reply_enabled") else 0
+        auto_reply_message = str(data.get("auto_reply_message", "")).strip()
 
         if not name:
             return jsonify({"status": "error", "message": "El nombre del perfil es obligatorio."}), 400
@@ -227,7 +229,7 @@ def manage_send_profiles():
 
         profile_id = db.create_send_profile(
             name, campaign_id, delay_min, delay_max, msgs_session, msgs_interval, rest_mins,
-            acc_sending, acc_history, hist_msgs
+            acc_sending, acc_history, hist_msgs, auto_reply_enabled, auto_reply_message
         )
         return jsonify({"status": "success", "profile_id": profile_id, "message": "Perfil de envío creado correctamente."})
 
@@ -247,6 +249,8 @@ def update_send_profile_endpoint(profile_id):
     acc_sending = int(data.get("accounts_for_sending", 5))
     acc_history = int(data.get("accounts_for_history", 5))
     hist_msgs = int(data.get("history_msgs_per_turn", 2))
+    auto_reply_enabled = 1 if data.get("auto_reply_enabled") else 0
+    auto_reply_message = str(data.get("auto_reply_message", "")).strip()
 
     if not name:
         return jsonify({"status": "error", "message": "El nombre del perfil es obligatorio."}), 400
@@ -257,7 +261,7 @@ def update_send_profile_endpoint(profile_id):
 
     updated = db.update_send_profile(
         profile_id, name, campaign_id, delay_min, delay_max, msgs_session, msgs_interval, rest_mins,
-        acc_sending, acc_history, hist_msgs
+        acc_sending, acc_history, hist_msgs, auto_reply_enabled, auto_reply_message
     )
     if updated:
         return jsonify({"status": "success", "message": "Perfil de envío actualizado correctamente."})
@@ -313,6 +317,8 @@ def get_accounts():
             "status_state":  info.get("status_state", "disponible"),
             "notes":         info.get("notes", "") or "",
             "phone":         info.get("phone", "") or "",
+            "first_name":    info.get("first_name", "") or "",
+            "last_name":     info.get("last_name", "") or "",
         })
 
     return jsonify({
@@ -377,16 +383,14 @@ def export_accounts_contacts_csv():
         if not phone_val:
             continue
             
-        # Generar combinación única de Nombre + Apellido con Número Aleatorio
-        while True:
-            fn = random.choice(FIRST_NAMES_BANK)
-            ln_base = random.choice(LAST_NAMES_BANK)
-            rand_num = random.randint(1000, 9999)
-            ln = f"{ln_base} {rand_num}"
-            full = f"{fn} {ln}"
-            if full not in used_full_names:
-                used_full_names.add(full)
-                break
+        # Obtener o asignar nombre estructurado persistente para el contacto
+        fn = info.get("first_name", "")
+        ln = info.get("last_name", "")
+        if not fn or not ln:
+            fn, ln = db.generate_random_contact_name(used_full_names)
+            db.update_account_state(acc_id, info.get("status_state", "disponible"), raw_phone, info.get("notes", ""), first_name=fn, last_name=ln)
+        else:
+            used_full_names.add(f"{fn} {ln}")
                 
         row = [
             fn,                 # First Name
