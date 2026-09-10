@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WA Platform v5.0 | Orquestador Multi-Cuenta</title>
+    <meta name="description" content="Panel de control para gestión de múltiples cuentas de WhatsApp con campañas y perfiles de envío inteligentes.">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <!-- App CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="app-wrapper">
+
+    <!-- ===== SIDEBAR ===== -->
+    <aside class="sidebar">
+        <div>
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <i class="fa-brands fa-whatsapp"></i>
+                </div>
+                <div class="sidebar-brand">
+                    <h2>WA Platform</h2>
+                    <span class="brand-tag">v5.0 · Multi-Account</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-tab="tab-dashboard" id="nav-dashboard">
+                    <i class="fa-solid fa-chart-pie"></i>
+                    <span>Dashboard Global</span>
+                </button>
+                <button class="nav-item" data-tab="tab-accounts" id="nav-accounts">
+                    <i class="fa-solid fa-users-gear"></i>
+                    <span>Gestor de Cuentas</span>
+                </button>
+                <button class="nav-item" data-tab="tab-campaigns" id="nav-campaigns">
+                    <i class="fa-solid fa-bullhorn"></i>
+                    <span>Campañas</span>
+                </button>
+                <button class="nav-item" data-tab="tab-send-profiles" id="nav-profiles">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>Perfiles de Envío</span>
+                </button>
+            </nav>
+        </div>
+
+        <div class="sidebar-footer">
+            <div class="system-pulse">
+                <span class="pulse-dot"></span>
+                <span>Sistema Operativo</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <main class="main-content">
+
+        <!-- ============================================================
+             PESTAÑA 1: DASHBOARD GLOBAL
+             ============================================================ -->
+        <section class="tab-pane active" id="tab-dashboard">
+            <div class="top-header">
+                <div>
+                    <h1><i class="fa-solid fa-chart-pie" style="font-size:22px; -webkit-text-fill-color: var(--primary);"></i> Dashboard Global</h1>
+                    <p class="subtitle">Estado en tiempo real · Instancias · Métricas de red</p>
+                </div>
+                <div class="live-badge">
+                    <i class="fa-solid fa-circle" style="font-size:7px;"></i>
+                    Actualizando en vivo
+                </div>
+            </div>
+
+            <!-- 7 Contador Cards -->
+            <div class="metrics-grid">
+                <div class="metric-card m-blue">
+                    <div class="metric-icon m-blue"><i class="fa-solid fa-database"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">Total Registradas</span>
+                        <h3 class="metric-value" id="dash-total">0</h3>
+                    </div>
+                </div>
+                <div class="metric-card m-green">
+                    <div class="metric-icon m-green"><i class="fa-solid fa-circle-check"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">Disponibles</span>
+                        <h3 class="metric-value" id="dash-disponibles">0</h3>
+                    </div>
+                </div>
+                <div class="metric-card m-cyan">
+                    <div class="metric-icon m-cyan"><i class="fa-solid fa-bolt"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">En Ejecución</span>
+                        <h3 class="metric-value" id="dash-ejecucion">0</h3>
+                    </div>
+                </div>
+                <div class="metric-card m-emerald">
+                    <div class="metric-icon m-emerald"><i class="fa-solid fa-paper-plane"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">Enviando</span>
+                        <h3 class="metric-value" id="dash-enviando">0</h3>
+                    </div>
+                </div>
+                <div class="metric-card m-purple">
+                    <div class="metric-icon m-purple"><i class="fa-solid fa-comments"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">Hist. Conversación</span>
+                        <h3 class="metric-value" id="dash-historial">0</h3>
+                    </div>
+                </div>
+                <div class="metric-card m-yellow">
+                    <div class="metric-icon m-yellow"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">Restringidas</span>
+                        <h3 class="metric-value" id="dash-restringidas">0</h3>
+                    </div>
+                </div>
+                <div class="metric-card m-red">
+                    <div class="metric-icon m-red"><i class="fa-solid fa-ban"></i></div>
+                    <div class="metric-info">
+                        <span class="metric-label">Bloqueadas</span>
+                        <h3 class="metric-value" id="dash-bloqueadas">0</h3>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabla de instancias activas -->
+            <div class="panel-box">
+                <div class="panel-header">
+                    <h3><i class="fa-solid fa-server"></i> Servicios / Instancias en Ejecución</h3>
+                    <span id="dash-disk-info" style="font-size:12px; color: var(--text-muted);"></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="custom-table" id="tbl-active">
+                        <thead>
+                            <tr>
+                                <th>Cuenta</th>
+                                <th>Estado Actual</th>
+                                <th>Tamaño Perfil</th>
+                                <th>Última Actividad</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tbl-active-body">
+                            <tr><td colspan="5" class="empty-cell">
+                                <i class="fa-solid fa-moon"></i>
+                                No hay instancias en ejecución
+                            </td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================
+             PESTAÑA 2: GESTOR DE CUENTAS
+             ============================================================ -->
+        <section class="tab-pane" id="tab-accounts">
+            <div class="top-header">
+                <div>
+                    <h1><i class="fa-solid fa-users-gear" style="font-size:22px; -webkit-text-fill-color: var(--primary);"></i> Gestor de Cuentas</h1>
+                    <p class="subtitle">Perfiles persistentes de Chromium — sesiones almacenadas en disco como carpetas comprimidas</p>
+                </div>
+                <button class="btn btn-primary btn-glow" id="btn-add-account">
+                    <i class="fa-solid fa-user-plus"></i> Agregar Cuenta
+                </button>
+            </div>
+
+            <div class="section-bar">
+                <h2><i class="fa-solid fa-layer-group"></i> Cuentas Almacenadas</h2>
+                <div class="live-badge">
+                    <span class="pulse-dot" style="width:7px;height:7px;"></span>
+                    Actualizando estado en vivo
+                </div>
+            </div>
+
+            <div class="accounts-grid" id="accounts-container">
+                <div class="loading-state">
+                    <i class="fa-solid fa-circle-notch fa-spin"></i>
+                    <p>Cargando cuentas...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================
+             PESTAÑA 3: CAMPAÑAS
+             ============================================================ -->
+        <section class="tab-pane" id="tab-campaigns">
+            <div class="top-header">
+                <div>
+                    <h1><i class="fa-solid fa-bullhorn" style="font-size:22px; -webkit-text-fill-color: var(--primary);"></i> Gestor de Campañas</h1>
+                    <p class="subtitle">Mensajes estáticos o dinámicos con variables como <code style="background:rgba(59,130,246,0.15);color:#93c5fd;padding:1px 6px;border-radius:4px;">{nombre}</code>, <code style="background:rgba(59,130,246,0.15);color:#93c5fd;padding:1px 6px;border-radius:4px;">{ciudad}</code>, etc.</p>
+                </div>
+                <button class="btn btn-primary" id="btn-open-create-campaign">
+                    <i class="fa-solid fa-plus"></i> Nueva Campaña
+                </button>
+            </div>
+
+            <div class="section-toolbar">
+                <h2><i class="fa-solid fa-bullhorn"></i> Campañas Guardadas <span class="count-pill" id="campaigns-count">0</span></h2>
+            </div>
+
+            <div class="campaigns-grid" id="campaigns-container">
+                <div class="loading-state">
+                    <i class="fa-solid fa-circle-notch fa-spin"></i>
+                    <p>Cargando campañas...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================
+             PESTAÑA 4: PERFILES DE ENVÍO
+             ============================================================ -->
+        <section class="tab-pane" id="tab-send-profiles">
+            <div class="top-header">
+                <div>
+                    <h1><i class="fa-solid fa-sliders" style="font-size:22px; -webkit-text-fill-color: var(--primary);"></i> Perfiles de Envío</h1>
+                    <p class="subtitle">Configura el ritmo de envío, límites por sesión e intervalos de reposo para proteger tus cuentas</p>
+                </div>
+                <button class="btn btn-primary" id="btn-open-create-profile">
+                    <i class="fa-solid fa-plus"></i> Nuevo Perfil
+                </button>
+            </div>
+
+            <div class="section-toolbar">
+                <h2><i class="fa-solid fa-list-check"></i> Perfiles Configurados <span class="count-pill" id="profiles-count">0</span></h2>
+            </div>
+
+            <div class="profiles-grid" id="profiles-container">
+                <div class="loading-state">
+                    <i class="fa-solid fa-circle-notch fa-spin"></i>
+                    <p>Cargando perfiles...</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<!-- ===================================================================
+     MODAL: AGREGAR CUENTA (QR)
+     =================================================================== -->
+<div class="modal-overlay" id="modal-add">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3><i class="fa-solid fa-qrcode"></i> Registrar Nueva Cuenta</h3>
+            <button class="close-btn" id="close-modal-add">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+                Asigna un nombre único a la cuenta. Se abrirá un navegador Chromium donde deberás escanear el código QR de WhatsApp Web.
+            </p>
+            <div class="form-group">
+                <label for="input-account-name">Nombre / Identificador</label>
+                <input type="text" id="input-account-name" placeholder="Ej: cuenta_01, ventas_norte">
+            </div>
+            <div class="status-info-box hidden" id="qr-status-box">
+                <div class="spinner"><i class="fa-solid fa-circle-notch fa-spin"></i></div>
+                <div class="status-info-text" id="qr-status-text">Esperando escaneo...</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-add-btn">Cancelar</button>
+            <button class="btn btn-primary" id="confirm-add-btn">
+                <i class="fa-solid fa-arrow-right"></i> Abrir Navegador
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================================================================
+     MODAL: CREAR CAMPAÑA
+     =================================================================== -->
+<div class="modal-overlay" id="modal-campaign">
+    <div class="modal-card modal-lg">
+        <div class="modal-header">
+            <h3><i class="fa-solid fa-bullhorn"></i> Nueva Campaña</h3>
+            <button class="close-btn" id="close-modal-campaign">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="input-campaign-name">Nombre de la Campaña</label>
+                <input type="text" id="input-campaign-name" placeholder="Ej: Oferta Navideña 2026">
+            </div>
+
+            <div class="form-group">
+                <label for="select-campaign-type">Tipo de Campaña</label>
+                <select id="select-campaign-type">
+                    <option value="estatica">📝 Mensaje Estático — mismo texto para todos</option>
+                    <option value="dinamica">⚡ Mensaje Dinámico — con variables personalizadas</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="input-campaign-template">Plantilla del Mensaje</label>
+                <textarea id="input-campaign-template" rows="4"
+                    placeholder="Ej: Hola {nombre}, tu pedido {pedido} está listo en {ciudad} 🎉"></textarea>
+                <span class="form-hint">Usa corchetes para las variables: <code style="color:#93c5fd">{nombre}</code>, <code style="color:#93c5fd">{ciudad}</code>, etc.</span>
+            </div>
+
+            <div class="vars-detected-box hidden" id="vars-detected-box">
+                <label><i class="fa-solid fa-code"></i> Variables Detectadas:</label>
+                <div class="vars-row" id="vars-tags-list"></div>
+            </div>
+
+            <div class="preview-box">
+                <label><i class="fa-brands fa-whatsapp"></i> Vista Previa</label>
+                <div class="whatsapp-bubble" id="campaign-preview-bubble">Tu mensaje aparecerá aquí...</div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-campaign-btn">Cancelar</button>
+            <button class="btn btn-primary" id="save-campaign-btn">
+                <i class="fa-solid fa-floppy-disk"></i> Guardar Campaña
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================================================================
+     MODAL: CREAR PERFIL DE ENVÍO
+     =================================================================== -->
+<div class="modal-overlay" id="modal-send-profile">
+    <div class="modal-card modal-lg">
+        <div class="modal-header">
+            <h3><i class="fa-solid fa-sliders"></i> Nuevo Perfil de Envío</h3>
+            <button class="close-btn" id="close-modal-send-profile">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="input-profile-name">Nombre del Perfil</label>
+                <input type="text" id="input-profile-name" placeholder="Ej: Envío Seguro — 10 msgs/sesión">
+            </div>
+
+            <div class="form-group">
+                <label for="select-profile-campaign">Campaña Vinculada</label>
+                <select id="select-profile-campaign">
+                    <option value="">— Sin campaña vinculada —</option>
+                </select>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="input-delay-min">Tiempo mínimo entre msgs (seg)</label>
+                    <input type="number" id="input-delay-min" value="15" min="2">
+                </div>
+                <div class="form-group">
+                    <label for="input-delay-max">Tiempo máximo entre msgs (seg)</label>
+                    <input type="number" id="input-delay-max" value="45" min="5">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="input-msgs-session">Mensajes por sesión / instancia</label>
+                    <input type="number" id="input-msgs-session" value="10" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="input-msgs-interval">Mensajes por ráfaga / intervalo</label>
+                    <input type="number" id="input-msgs-interval" value="2" min="1">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="input-rest-mins">Tiempo de reposo entre sesiones (minutos)</label>
+                <input type="number" id="input-rest-mins" value="30" min="1">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-send-profile-btn">Cancelar</button>
+            <button class="btn btn-primary" id="save-send-profile-btn">
+                <i class="fa-solid fa-floppy-disk"></i> Guardar Perfil
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ===================================================================
+     MODAL: ENVIAR MENSAJE DE PRUEBA
+     =================================================================== -->
+<div class="modal-overlay" id="modal-send">
+    <div class="modal-card">
+        <div class="modal-header">
+            <h3><i class="fa-solid fa-paper-plane"></i> Enviar Mensaje de Prueba</h3>
+            <button class="close-btn" id="close-modal-send">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="alert-box info" style="margin-bottom:14px;">
+                <i class="fa-solid fa-circle-info"></i>
+                Cuenta: <strong id="send-modal-account-name"></strong>
+            </div>
+            <div class="form-group">
+                <label for="input-target-phone">Número de WhatsApp (con código de país)</label>
+                <input type="text" id="input-target-phone" placeholder="Ej: 573001234567">
+            </div>
+            <div class="form-group">
+                <label for="input-target-message">Mensaje</label>
+                <textarea id="input-target-message" rows="3" placeholder="Hola, mensaje de prueba 👋"></textarea>
+            </div>
+            <div class="hidden" id="send-status-box"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="cancel-send-btn">Cancelar</button>
+            <button class="btn btn-primary" id="confirm-send-btn">
+                <i class="fa-solid fa-paper-plane"></i> Enviar
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<!-- App JS -->
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+# Node modules & builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+static/dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.env
+
+# Databases & Runtime Data
+*.db
+*.sqlite3
+*.db-journal
+data/
+
+# Chrome / Chromium Profiles & Sessions
+profiles/
+sessions/
+Crashpad/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs & Scratch
+*.log
+scratch/
