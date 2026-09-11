@@ -427,6 +427,21 @@ class AutomationEngine:
                             human_delay(delay_min, delay_max)
 
                     last_sent_timestamp[acc_id] = time.time()
+
+                    # Escanear chats no leídos POST-RÁFAGA: captura respuestas de clientes
+                    # que llegaron mientras se enviaban los mensajes de esta ráfaga
+                    try:
+                        all_states_post = db.get_all_account_states()
+                        peer_phones_post = {info["phone"] for info in all_states_post.values() if info.get("phone")}
+                        res_post = runner.check_and_process_unread_chats(
+                            acc_id, peer_phones_post,
+                            auto_reply_enabled=auto_reply_enabled,
+                            auto_reply_message=auto_reply_message
+                        )
+                        if res_post.get("notified_clients", 0) > 0:
+                            print(f"[AutomationEngine] 🔔 [Post-ráfaga] {res_post['notified_clients']} cliente(s) notificados en '{acc_id}'")
+                    except Exception as scan_post_err:
+                        print(f"[AutomationEngine] Nota en escaneo post-ráfaga: {scan_post_err}")
                     db.update_account_state(acc_id, "disponible", notes="Disponible")
                     time.sleep(2)
 
