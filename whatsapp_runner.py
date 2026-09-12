@@ -697,143 +697,147 @@ class WhatsAppRunner:
             except Exception:
                 pass
 
-            print(f"[{account_id}] 🔍 Buscando chats no leídos...")
-            time.sleep(1.5)
+            print(f"[{account_id}] 🔍 Buscando TODOS los chats no leídos sin excepción...")
+            time.sleep(1.0)
 
-            # Selectores del ejemplo de referencia:
-            # badge español: span[aria-label*="mensaje"][aria-label*="no leído"]
-            # badge inglés:  span[aria-label*="unread"]
-            unread_rows = page.locator(
-                'div[role="row"]:has(span[aria-label*="mensaje"][aria-label*="no leído"]),'
-                'div[role="row"]:has(span[aria-label*="unread"])'
-            ).all()
+            # Bucle continuo hasta procesar TODOS los chats no leídos disponibles (sin límite)
+            max_scan_passes = 5
+            pass_num = 0
+            processed_titles_in_run = set()
 
-            if not unread_rows:
-                print(f"[{account_id}] ✓ Sin chats no leídos pendientes.")
-                return {"replied_friends": 0, "notified_clients": 0}
+            # Selectores exhaustivos de badges de mensajes no leídos
+            UNREAD_ROW_SELECTORS = [
+                'div[role="row"]:has(span[aria-label*="no leído"])',
+                'div[role="row"]:has(span[aria-label*="no leido"])',
+                'div[role="row"]:has(span[aria-label*="unread"])',
+                'div[role="row"]:has(span[data-testid="icon-unread-count"])',
+                'div[role="row"]:has(span[aria-label*="mensaje"])',
+                'div[role="row"]:has(div[aria-label*="unread"])',
+                'div[role="row"]:has(div[aria-label*="no leído"])',
+            ]
 
-            print(f"[{account_id}] 📬 {len(unread_rows)} chat(s) no leído(s) detectado(s).")
+            while pass_num < max_scan_passes:
+                pass_num += 1
 
-            for row in unread_rows[:8]:  # máximo 8 chats por ciclo
-                chat_name = "?"
-                try:
-                    # Selector correcto del ejemplo: span[dir="auto"][title]
-                    nombre_elem = row.locator('span[dir="auto"][title]').first
-                    if not nombre_elem.is_visible(timeout=1000):
-                        continue
-                    chat_name = nombre_elem.get_attribute("title") or nombre_elem.inner_text()
-                    if not chat_name:
-                        continue
-
-                    clean_digits = re.sub(r'[^\d]', '', chat_name)
-                    chat_name_lower = chat_name.strip().lower()
-
-                    # Verificar si es cuenta amiga o cuenta del sistema
-                    is_friend = False
-
-                    # Opción 1: comparar por dígitos de teléfono
-                    if not is_friend and clean_digits and len(clean_digits) >= 7:
-                        for peer_digits in combined_peers:
-                            if peer_digits and (peer_digits in clean_digits or clean_digits in peer_digits):
-                                is_friend = True
-                                break
-
-                    # Opción 2: comparar por nombre de contacto asignado (first_name + last_name)
-                    if not is_friend:
-                        for sys_name in system_names:
-                            if sys_name and (sys_name in chat_name_lower or chat_name_lower in sys_name):
-                                is_friend = True
-                                print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por nombre en BD ('{sys_name}'). Omitiendo notificación cliente.")
-                                break
-
-                    # Opción 3: patrón de nombre autogenerado "NombreBanco ApellidoBanco NNNN"
-                    # Captura cuentas antiguas/reemplazadas que ya no están en BD
-                    if not is_friend and db.is_system_generated_name(chat_name):
-                        is_friend = True
-                        print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por patrón autogenerado. Omitiendo notificación cliente.")
-
-                    # Abrir el chat haciendo clic en el row
+                # Buscar filas no leídas con todos los selectores
+                unread_rows = []
+                for sel in UNREAD_ROW_SELECTORS:
                     try:
-                        row.click()
-                        time.sleep(1)
+                        found = page.locator(sel).all()
+                        if found:
+                            for f in found:
+                                if f not in unread_rows:
+                                    unread_rows.append(f)
                     except Exception:
-                        # Fallback: rebuscar el row por título
-                        try:
-                            safe_name = chat_name.replace("'", "\\'")
-                            alt = page.locator(f"//span[@title='{safe_name}']/ancestor::div[@role='row']").first
-                            alt.click()
-                            time.sleep(1)
-                        except Exception:
+                        pass
+
+                if not unread_rows:
+                    # Scroll en el panel lateral #pane-side por si hay chats no leídos más abajo
+                    try:
+                        pane = page.locator('#pane-side').first
+                        if pane.is_visible(timeout=500):
+                            pane.evaluate("el => el.scrollTop += 450")
+                            time.sleep(0.8)
+                            for sel in UNREAD_ROW_SELECTORS:
+                                try:
+                                    found = page.locator(sel).all()
+                                    if found:
+                                        for f in found:
+                                            if f not in unread_rows:
+                                                unread_rows.append(f)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+                if not unread_rows:
+                    break
+
+                print(f"[{account_id}] 📬 Pasada #{pass_num}: {len(unread_rows)} chat(s) no leído(s) detectado(s). Procesando todos...")
+
+                processed_in_this_pass = 0
+
+                for row in unread_rows:
+                    if page.is_closed():
+                        break
+
+                    chat_name = "?"
+                    try:
+                        nombre_elem = row.locator('span[dir="auto"][title]').first
+                        if not nombre_elem.is_visible(timeout=1000):
+                            nombre_elem = row.locator('span[dir="auto"]').first
+                            if not nombre_elem.is_visible(timeout=800):
+                                continue
+
+                        chat_name = (nombre_elem.get_attribute("title") or nombre_elem.inner_text() or "").strip()
+                        if not chat_name or chat_name in processed_titles_in_run:
                             continue
 
-                    if is_friend:
-                        # Amigo: responder saludo de calentamiento
-                        print(f"[{account_id}] 🤖 Amigo ('{chat_name}'). Respondiendo calentamiento...")
-                        compose = self._find_compose_input(page)
-                        if compose:
-                            warmup_replies = [
-                                "Hola! Todo bien por acá 👍",
-                                "Perfecto, seguimos en contacto!",
-                                "Excelente, un saludo!",
-                                "Revisado, gracias!",
-                                "👍 Todo listo!"
-                            ]
-                            reply_text = random.choice(warmup_replies)
-                            compose.click()
-                            page.keyboard.type(reply_text, delay=20)
-                            time.sleep(0.3)
-                            sent = False
+                        processed_titles_in_run.add(chat_name)
+                        clean_digits = re.sub(r'[^\d]', '', chat_name)
+                        chat_name_lower = chat_name.lower()
+
+                        # Verificar si es cuenta amiga o cuenta del sistema
+                        is_friend = False
+
+                        if clean_digits and len(clean_digits) >= 7:
+                            for peer_digits in combined_peers:
+                                if peer_digits and (peer_digits in clean_digits or clean_digits in peer_digits):
+                                    is_friend = True
+                                    break
+
+                        if not is_friend:
+                            for sys_name in system_names:
+                                if sys_name and (sys_name in chat_name_lower or chat_name_lower in sys_name):
+                                    is_friend = True
+                                    print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por nombre en BD ('{sys_name}'). Omitiendo notificación cliente.")
+                                    break
+
+                        if not is_friend and db.is_system_generated_name(chat_name):
+                            is_friend = True
+                            print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por patrón autogenerado. Omitiendo notificación cliente.")
+
+                        # Abrir el chat haciendo clic en el row
+                        click_ok = False
+                        try:
+                            row.click(force=True, timeout=2000)
+                            click_ok = True
+                            time.sleep(1)
+                        except Exception:
                             try:
-                                send_btn = page.locator(
-                                    'button[aria-label*="Enviar"], button[aria-label*="Send"], '
-                                    'span[data-icon="send"]'
-                                ).first
-                                if send_btn.is_visible(timeout=1500):
-                                    send_btn.click()
-                                    sent = True
+                                safe_name = chat_name.replace("'", "\\'")
+                                alt = page.locator(f"//span[@title='{safe_name}']/ancestor::div[@role='row']").first
+                                alt.click(force=True, timeout=2000)
+                                click_ok = True
+                                time.sleep(1)
                             except Exception:
                                 pass
-                            if not sent:
-                                compose.press("Enter")
-                            replied_friends += 1
 
-                    else:
-                        # Cliente real: leer último mensaje y notificar
-                        print(f"[{account_id}] 🔔 ¡Cliente real ('{chat_name}')! Guardando notificación...")
-                        last_msg_text = ""
-                        try:
-                            # Selectores del ejemplo de referencia para mensajes entrantes
-                            for sel in [
-                                'span[data-testid="selectable-text"]',
-                                'div.message-in span.copyable-text',
-                                'div.message-in span.selectable-text',
-                            ]:
-                                elems = page.locator(sel).all()
-                                if elems:
-                                    last_msg_text = elems[-1].inner_text().strip()
-                                    if last_msg_text:
-                                        break
-                        except Exception:
-                            pass
+                        if not click_ok:
+                            continue
 
-                        db.add_client_notification(
-                            account_id, chat_name, chat_name,
-                            last_msg_text or "Nuevo mensaje no leído de cliente."
-                        )
-                        notified_clients += 1
+                        processed_in_this_pass += 1
 
-                        if auto_reply_enabled and auto_reply_message and auto_reply_message.strip():
-                            print(f"[{account_id}] 🤖 Autorespuesta activa para cliente ('{chat_name}'). Enviando...")
+                        if is_friend:
+                            # Amigo: responder saludo de calentamiento
+                            print(f"[{account_id}] 🤖 Amigo ('{chat_name}'). Respondiendo calentamiento...")
                             compose = self._find_compose_input(page)
                             if compose:
+                                warmup_replies = [
+                                    "Hola! Todo bien por acá 👍",
+                                    "Perfecto, seguimos en contacto!",
+                                    "Excelente, un saludo!",
+                                    "Revisado, gracias!",
+                                    "👍 Todo listo!"
+                                ]
+                                reply_text = random.choice(warmup_replies)
                                 compose.click()
-                                page.keyboard.type(auto_reply_message.strip(), delay=20)
+                                page.keyboard.type(reply_text, delay=20)
                                 time.sleep(0.3)
                                 sent = False
                                 try:
                                     send_btn = page.locator(
-                                        'button[aria-label*="Enviar"], button[aria-label*="Send"], '
-                                        'span[data-icon="send"]'
+                                        'button[aria-label*="Enviar"], button[aria-label*="Send"], span[data-icon="send"]'
                                     ).first
                                     if send_btn.is_visible(timeout=1500):
                                         send_btn.click()
@@ -842,21 +846,83 @@ class WhatsAppRunner:
                                     pass
                                 if not sent:
                                     compose.press("Enter")
-                                time.sleep(1)
+                                replied_friends += 1
 
-                    # Cerrar chat
-                    try:
-                        page.keyboard.press("Escape")
-                        time.sleep(0.5)
-                    except Exception:
-                        pass
+                        else:
+                            # Cliente real: leer último mensaje y notificar
+                            print(f"[{account_id}] 🔔 ¡Cliente real ('{chat_name}')! Guardando notificación...")
+                            last_msg_text = ""
+                            try:
+                                for sel in [
+                                    'span[data-testid="selectable-text"]',
+                                    'div.message-in span.copyable-text',
+                                    'div.message-in span.selectable-text',
+                                    'div.message-in div.copyable-text',
+                                ]:
+                                    elems = page.locator(sel).all()
+                                    if elems:
+                                        last_msg_text = elems[-1].inner_text().strip()
+                                        if last_msg_text:
+                                            break
+                            except Exception:
+                                pass
 
-                except Exception as err_item:
-                    print(f"[{account_id}] Error procesando chat '{chat_name}': {err_item}")
-                    try:
-                        page.keyboard.press("Escape")
-                    except Exception:
-                        pass
+                            db.add_client_notification(
+                                account_id, chat_name, chat_name,
+                                last_msg_text or "Nuevo mensaje no leído de cliente."
+                            )
+                            notified_clients += 1
+
+                            if auto_reply_enabled and auto_reply_message and auto_reply_message.strip():
+                                print(f"[{account_id}] 🤖 Autorespuesta activa para cliente ('{chat_name}'). Enviando...")
+                                compose = self._find_compose_input(page)
+                                if compose:
+                                    compose.click()
+                                    page.keyboard.type(auto_reply_message.strip(), delay=20)
+                                    time.sleep(0.3)
+                                    sent = False
+                                    try:
+                                        send_btn = page.locator(
+                                            'button[aria-label*="Enviar"], button[aria-label*="Send"], span[data-icon="send"]'
+                                        ).first
+                                        if send_btn.is_visible(timeout=1500):
+                                            send_btn.click()
+                                            sent = True
+                                    except Exception:
+                                        pass
+                                    if not sent:
+                                        compose.press("Enter")
+                                    time.sleep(1)
+
+                        # Cerrar chat con Escape inmediatamente tras procesar
+                        try:
+                            page.keyboard.press("Escape")
+                            time.sleep(0.3)
+                            page.keyboard.press("Escape")
+                            time.sleep(0.3)
+                        except Exception:
+                            pass
+
+                    except Exception as err_item:
+                        print(f"[{account_id}] Error procesando chat '{chat_name}': {err_item}")
+                        try:
+                            page.keyboard.press("Escape")
+                        except Exception:
+                            pass
+
+                if processed_in_this_pass == 0:
+                    break
+
+            # Volver scroll al inicio al terminar la exploración completa
+            try:
+                page.locator('#pane-side').first.evaluate("el => el.scrollTop = 0")
+            except Exception:
+                pass
+
+            if notified_clients > 0 or replied_friends > 0:
+                print(f"[{account_id}] ✅ Escaneo exhaustivo completado: {notified_clients} cliente(s) notificados, {replied_friends} amigo(s) respondidos.")
+            else:
+                print(f"[{account_id}] ✓ Escaneo exhaustivo completado: 0 chats no leídos pendientes.")
 
         except Exception as e:
             print(f"[{account_id}] Error en escaneo de chats: {e}")
