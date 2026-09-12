@@ -3,7 +3,7 @@ node_modules/
 frontend/node_modules/
 dist/
 frontend/dist/
-static/dist/
+# static/dist/ — incluido en el repo para servir el frontend sin compilar
 
 # Python
 __pycache__/
