@@ -1579,15 +1579,11 @@ class WhatsAppRunner:
 
             # ── Paso 4: Clic en la fila del contacto coincidente ─────────────
             opened = False
-            first_word = clean_name.split()[0] if clean_name else ""
 
             selectors_to_try = [
                 f'span[title="{clean_name}"]',
                 f'span[title*="{clean_name}"]',
-                f'span[title*="{first_word}"]',
                 f'span:has-text("{clean_name}")',
-                f'span:has-text("{first_word}")',
-                f'div[role="button"]:has-text("{first_word}")',
                 '[data-testid="cell-frame-container"]',
                 'div[data-tab="4"][role="button"]',
                 'div[role="row"]',
@@ -1629,7 +1625,7 @@ class WhatsAppRunner:
                 print(f"[{account_id}] ✅ Chat para '{clean_name}' abierto y compose box listo.")
                 return True
 
-            print(f"[{account_id}] ❌ No se pudo confirmar apertura del chat de '{clean_name}'.")
+            print(f"[{account_id}] ❌ No se pudo abrir chat para '{clean_name}'.")
             return False
 
         except Exception as e:
@@ -1654,28 +1650,20 @@ class WhatsAppRunner:
             if self.check_if_blocked_or_logged_out(page, account_id):
                 return False, f"La cuenta '{account_id}' se encuentra BLOQUEADA/Desconectada en WhatsApp."
 
-            print(f"[{account_id}] 💬 [Historial] Buscando contacto amigo UNICAMENTE POR NOMBRE: '{target_name}'...")
+            print(f"[{account_id}] 💬 [Historial] Buscando contacto amigo por NOMBRE COMPLETO: '{target_name}'...")
 
-            # 1. Intentar abrir chat buscando por NOMBRE del contacto (first_name + last_name)
+            # Intentar abrir chat buscando únicamente por NOMBRE COMPLETO (first_name + last_name)
             chat_opened = self._open_chat_for_name(page, account_id, target_name)
 
-            # 2. Fallback por nombre sin sufijos numéricos (ej. si target_name es "Daniela Ramirez 9319" -> "Daniela Ramirez")
-            if not chat_opened and target_name:
-                clean_name_base = re.sub(r'\s*\d+$', '', target_name).strip()
-                if clean_name_base != target_name:
-                    print(f"[{account_id}] 💬 Reintentando busqueda por nombre base: '{clean_name_base}'...")
-                    chat_opened = self._open_chat_for_name(page, account_id, clean_name_base)
-
-            # 3. Fallback por primer nombre (ej. "Daniela")
-            if not chat_opened and target_name:
-                first_name_only = target_name.split()[0].strip()
-                if first_name_only and first_name_only != target_name:
-                    print(f"[{account_id}] 💬 Reintentando busqueda por primer nombre: '{first_name_only}'...")
-                    chat_opened = self._open_chat_for_name(page, account_id, first_name_only)
-
-            # NOTA: NO se realiza fallback por número de teléfono para cuentas amigas de historial.
             if not chat_opened:
-                return False, f"No se pudo abrir el chat por nombre con la cuenta amiga '{target_name}'."
+                print(f"[{account_id}] 💬 Contacto '{target_name}' no fue encontrado en WhatsApp Web. Pasando al siguiente contacto...")
+                try:
+                    page.keyboard.press("Escape")
+                    time.sleep(0.3)
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                return False, f"Contacto amigo '{target_name}' no fue encontrado."
 
             # Localizar el campo de texto de composicion
             chat_input = self._find_compose_input(page)
