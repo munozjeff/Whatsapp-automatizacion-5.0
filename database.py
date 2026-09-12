@@ -338,17 +338,11 @@ def update_account_state(account_id: str, status_state: str, phone: str = "", no
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Si NO es forzado (force=False), proteger estados 'bloqueado' y 'restringido' contra sobreescritura accidental por rutinas de background
-    if not force and status_state in ("disponible", "enviando", "haciendo_historial"):
-        cursor.execute("SELECT status_state FROM account_states WHERE account_id = ?", (account_id,))
-        row = cursor.fetchone()
-        if row and row["status_state"] in ("bloqueado", "restringido"):
-            conn.close()
-            return
-
     # Preservar o asignar nombres estructurados persistentes para contactos de Google
-    cursor.execute("SELECT first_name, last_name FROM account_states WHERE account_id = ?", (account_id,))
+    cursor.execute("SELECT status_state, first_name, last_name FROM account_states WHERE account_id = ?", (account_id,))
     row = cursor.fetchone()
+
+    current_status = row["status_state"] if row else ""
     existing_fn = row["first_name"] if row and row["first_name"] else ""
     existing_ln = row["last_name"] if row and row["last_name"] else ""
 
@@ -362,6 +356,13 @@ def update_account_state(account_id: str, status_state: str, phone: str = "", no
         auto_fn, auto_ln = generate_random_contact_name(used)
         if not fn_final: fn_final = auto_fn
         if not ln_final: ln_final = auto_ln
+
+    # Si NO es forzado (force=False), proteger estados 'bloqueado' y 'restringido' contra sobreescritura accidental por rutinas de background
+    if not force and status_state in ("disponible", "enviando", "haciendo_historial") and current_status in ("bloqueado", "restringido"):
+        cursor.execute("UPDATE account_states SET first_name=?, last_name=? WHERE account_id=?", (fn_final, ln_final, account_id))
+        conn.commit()
+        conn.close()
+        return
 
     cursor.execute("""
         INSERT INTO account_states (account_id, phone, status_state, notes, first_name, last_name, last_updated)
