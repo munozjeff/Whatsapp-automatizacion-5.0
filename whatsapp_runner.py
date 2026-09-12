@@ -1444,7 +1444,7 @@ class WhatsAppRunner:
         """
         Abre un chat de WhatsApp usando el flujo nativo de 'Nuevo chat' buscando por NOMBRE del contacto (first_name + last_name).
           Paso 1: ESC + Clic en boton 'Nuevo chat'
-          Paso 2: Esperar input de busqueda y escribir Nombre + Apellido
+          Paso 2: Esperar input de busqueda y escribir Nombre + Apellidos
           Paso 3: Esperar resultados de contacto
           Paso 4: Clic en la fila del contacto coincidente / ENTER
           Paso 5: Confirmar que el compose box quedo activo
@@ -1454,35 +1454,43 @@ class WhatsAppRunner:
             print(f"[{account_id}] ❌ Nombre de contacto vacio para busqueda de historial.")
             return False
 
-        print(f"[{account_id}] 🔍 [Nuevo chat Historial] Buscando contacto amigo por nombre: '{clean_name}'...")
+        print(f"[{account_id}] 🔍 [Nuevo chat Historial] Buscando contacto amigo por NOMBRE: '{clean_name}'...")
 
         NEW_CHAT_CSS = [
             '[title="Nuevo chat"]',
             '[aria-label="Nuevo chat"]',
             '[data-testid="new-chat-btn"]',
+            'button[aria-label*="Nuevo chat"]',
+            'div[title*="Nuevo chat"]',
         ]
         NEW_CHAT_XPATH = [
             '//span[@data-icon="new-chat-outline"]/ancestor::button[1]',
             '//button[@aria-label="Nuevo chat"]',
             '//div[@title="Nuevo chat"]',
+            '//span[@data-icon="chat"]/ancestor::button[1]',
         ]
 
         SEARCH_CSS = [
             'input[data-tab="3"]',
             'div[data-tab="3"][contenteditable="true"]',
             'input.copyable-text',
+            'div[contenteditable="true"][data-tab="3"]',
+            'p.copyable-text.x15bjb6t',
         ]
         SEARCH_XPATH = [
             '//p[contains(@class,"copyable-text") and contains(@class,"x15bjb6t")]',
             '//input[@data-tab="3" and contains(@class,"html-input")]',
             '//input[contains(@class,"copyable-text")]',
+            '//div[@contenteditable="true" and @data-tab="3"]',
         ]
 
         try:
             # ── Paso 1: Clic en boton 'Nuevo chat' ────────────────────────────────
             try:
                 page.keyboard.press("Escape")
-                time.sleep(0.4)
+                time.sleep(0.3)
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
             except Exception:
                 pass
 
@@ -1490,7 +1498,7 @@ class WhatsAppRunner:
             for css_sel in NEW_CHAT_CSS:
                 try:
                     loc = page.locator(css_sel).first
-                    if loc.is_visible(timeout=2000):
+                    if loc.is_visible(timeout=1500):
                         new_chat_btn = loc
                         print(f"[{account_id}] ✓ Boton 'Nuevo chat' (CSS: {css_sel})")
                         break
@@ -1501,7 +1509,7 @@ class WhatsAppRunner:
                 for xpath_sel in NEW_CHAT_XPATH:
                     try:
                         loc = page.locator(f"xpath={xpath_sel}").first
-                        if loc.is_visible(timeout=2000):
+                        if loc.is_visible(timeout=1500):
                             new_chat_btn = loc
                             print(f"[{account_id}] ✓ Boton 'Nuevo chat' (XPath)")
                             break
@@ -1525,7 +1533,7 @@ class WhatsAppRunner:
             for css_sel in SEARCH_CSS:
                 try:
                     loc = page.locator(css_sel).first
-                    loc.wait_for(state="visible", timeout=5000)
+                    loc.wait_for(state="visible", timeout=4000)
                     search_loc = loc
                     print(f"[{account_id}] ✓ Campo busqueda (CSS: {css_sel})")
                     break
@@ -1536,7 +1544,7 @@ class WhatsAppRunner:
                 for xpath_sel in SEARCH_XPATH:
                     try:
                         loc = page.locator(f"xpath={xpath_sel}").first
-                        loc.wait_for(state="visible", timeout=5000)
+                        loc.wait_for(state="visible", timeout=4000)
                         search_loc = loc
                         print(f"[{account_id}] ✓ Campo busqueda (XPath)")
                         break
@@ -1553,7 +1561,7 @@ class WhatsAppRunner:
 
             # Limpiar e ingresar Nombre + Apellidos
             try:
-                search_loc.click(force=True, timeout=3000)
+                search_loc.click(force=True, timeout=2000)
             except Exception:
                 try:
                     search_loc.evaluate("el => el.focus()")
@@ -1564,54 +1572,41 @@ class WhatsAppRunner:
             time.sleep(0.1)
             page.keyboard.press("Delete")
             time.sleep(0.1)
-            page.keyboard.type(clean_name, delay=35)
+            page.keyboard.type(clean_name, delay=40)
 
             # ── Paso 3: Esperar que aparezcan resultados de contacto ───────────
-            time.sleep(1.5)
+            time.sleep(1.8)
 
             # ── Paso 4: Clic en la fila del contacto coincidente ─────────────
             opened = False
-            name_parts = clean_name.split()
-            first_part = name_parts[0] if name_parts else clean_name
+            first_word = clean_name.split()[0] if clean_name else ""
 
-            try:
-                name_match = page.locator(
-                    f'span[title*="{clean_name}" i], '
-                    f'span[title*="{first_part}" i], '
-                    f'div[role="button"]:has-text("{first_part}")'
-                ).first
-                if name_match.is_visible(timeout=2000):
-                    try:
-                        name_match.click(force=True, timeout=2000)
-                    except Exception:
-                        name_match.evaluate("el => el.click()")
-                    opened = True
-                    print(f"[{account_id}] ✓ Clic en resultado por nombre ('{clean_name}').")
-            except Exception:
-                pass
+            selectors_to_try = [
+                f'span[title="{clean_name}"]',
+                f'span[title*="{clean_name}"]',
+                f'span[title*="{first_word}"]',
+                f'span:has-text("{clean_name}")',
+                f'span:has-text("{first_word}")',
+                f'div[role="button"]:has-text("{first_word}")',
+                '[data-testid="cell-frame-container"]',
+                'div[data-tab="4"][role="button"]',
+                'div[role="row"]',
+                'li[role="option"]'
+            ]
 
-            if not opened:
-                ROW_SELECTORS = [
-                    '[data-testid="cell-frame-container"]',
-                    'div[data-tab="4"][role="button"]',
-                    'div[role="button"]:has(span[title])',
-                    'div[role="listitem"]',
-                    'div[role="row"]',
-                    'li[role="option"]'
-                ]
-                for row_sel in ROW_SELECTORS:
-                    try:
-                        contact_row = page.locator(row_sel).first
-                        if contact_row.is_visible(timeout=1500):
-                            try:
-                                contact_row.click(force=True, timeout=2000)
-                            except Exception:
-                                contact_row.evaluate("el => el.click()")
-                            opened = True
-                            print(f"[{account_id}] ✓ Clic en primera fila de resultados ({row_sel}).")
-                            break
-                    except Exception:
-                        pass
+            for sel in selectors_to_try:
+                try:
+                    loc = page.locator(sel).first
+                    if loc.is_visible(timeout=1000):
+                        try:
+                            loc.click(force=True, timeout=2000)
+                        except Exception:
+                            loc.evaluate("el => el.click()")
+                        opened = True
+                        print(f"[{account_id}] ✓ Clic en resultado con selector '{sel}'.")
+                        break
+                except Exception:
+                    pass
 
             if not opened:
                 try:
@@ -1659,27 +1654,28 @@ class WhatsAppRunner:
             if self.check_if_blocked_or_logged_out(page, account_id):
                 return False, f"La cuenta '{account_id}' se encuentra BLOQUEADA/Desconectada en WhatsApp."
 
-            print(f"[{account_id}] 💬 [Historial] Buscando contacto amigo por NOMBRE: '{target_name}'...")
+            print(f"[{account_id}] 💬 [Historial] Buscando contacto amigo UNICAMENTE POR NOMBRE: '{target_name}'...")
 
             # 1. Intentar abrir chat buscando por NOMBRE del contacto (first_name + last_name)
             chat_opened = self._open_chat_for_name(page, account_id, target_name)
 
-            # 2. Fallback por nombre sin sufijos numéricos (ej. si target_name es "Carlos Rodriguez 4821" -> "Carlos Rodriguez")
+            # 2. Fallback por nombre sin sufijos numéricos (ej. si target_name es "Daniela Ramirez 9319" -> "Daniela Ramirez")
             if not chat_opened and target_name:
                 clean_name_base = re.sub(r'\s*\d+$', '', target_name).strip()
                 if clean_name_base != target_name:
                     print(f"[{account_id}] 💬 Reintentando busqueda por nombre base: '{clean_name_base}'...")
                     chat_opened = self._open_chat_for_name(page, account_id, clean_name_base)
 
-            # 3. Fallback por teléfono si no se encontró el contacto por nombre
-            if not chat_opened and target_phone:
-                clean_phone = "".join(filter(str.isdigit, target_phone))
-                if clean_phone:
-                    print(f"[{account_id}] 💬 Fallback: Abriendo chat por telefono +{clean_phone}...")
-                    chat_opened = self._open_chat_for_phone(page, account_id, clean_phone)
+            # 3. Fallback por primer nombre (ej. "Daniela")
+            if not chat_opened and target_name:
+                first_name_only = target_name.split()[0].strip()
+                if first_name_only and first_name_only != target_name:
+                    print(f"[{account_id}] 💬 Reintentando busqueda por primer nombre: '{first_name_only}'...")
+                    chat_opened = self._open_chat_for_name(page, account_id, first_name_only)
 
+            # NOTA: NO se realiza fallback por número de teléfono para cuentas amigas de historial.
             if not chat_opened:
-                return False, f"No se pudo abrir el chat con la cuenta amiga '{target_name}'."
+                return False, f"No se pudo abrir el chat por nombre con la cuenta amiga '{target_name}'."
 
             # Localizar el campo de texto de composicion
             chat_input = self._find_compose_input(page)
@@ -1719,8 +1715,8 @@ class WhatsAppRunner:
                     sent = True
 
             human_delay(1, 2)
-            print(f"[{account_id}] 💬 [Historial] ✅ Mensaje enviado con éxito a '{target_name}'.")
-            return True, f"Mensaje de historial enviado a '{target_name}'."
+            print(f"[{account_id}] 💬 [Historial] ✅ Mensaje enviado con éxito por nombre a '{target_name}'.")
+            return True, f"Mensaje de historial enviado por nombre a '{target_name}'."
 
         except Exception as e:
             err_msg = str(e).encode('ascii', 'ignore').decode('ascii')
