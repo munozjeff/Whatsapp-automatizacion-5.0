@@ -1426,7 +1426,16 @@ class WhatsAppRunner:
 
             human_delay(1, 2)
 
-            print(f"[{account_id}] [OK] Mensaje enviado con éxito a +{clean_phone}")
+            # Presionar Escape para cerrar/deseleccionar el chat activo y volver a la lista principal
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+            except Exception:
+                pass
+
+            print(f"[{account_id}] [OK] Mensaje enviado con éxito a +{clean_phone} y chat cerrado con Escape.")
             return True, f"Mensaje enviado con éxito a +{clean_phone}"
 
         except Exception as e:
@@ -1703,7 +1712,17 @@ class WhatsAppRunner:
                     sent = True
 
             human_delay(1, 2)
-            print(f"[{account_id}] 💬 [Historial] ✅ Mensaje enviado con éxito por nombre a '{target_name}'.")
+
+            # Presionar Escape para cerrar/deseleccionar el chat activo y volver a la lista principal
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+                page.keyboard.press("Escape")
+                time.sleep(0.3)
+            except Exception:
+                pass
+
+            print(f"[{account_id}] 💬 [Historial] ✅ Mensaje enviado con éxito por nombre a '{target_name}' y chat cerrado con Escape.")
             return True, f"Mensaje de historial enviado por nombre a '{target_name}'."
 
         except Exception as e:
