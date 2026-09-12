@@ -593,65 +593,12 @@ class AutomationEngine:
                             db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante historial.", force=True)
                         return False
                     else:
-                        recovered = False
-                        max_retries = 3
-                        for attempt in range(1, max_retries + 1):
-                            print(f"[AutomationEngine] ⚠️ Fallo en historial de '{acc_id}' (sin bloqueo directo). Reintento ({attempt}/{max_retries}): cerrando y reabriendo navegador...")
-                            runner.close_instance(acc_id)
-                            time.sleep(2)
-                            runner.open_session(acc_id)
-
-                            wait_conn = 0
-                            reconnected = False
-                            while wait_conn < 45:
-                                if self.job_stop_flags.get(job_id, False):
-                                    return False
-                                h_st_rec = runner.active_instances.get(acc_id, {}).get("status", "")
-                                db_st_rec = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-                                if h_st_rec == "CONECTADA":
-                                    reconnected = True
-                                    break
-                                if h_st_rec == "BLOQUEADA" or db_st_rec in ("bloqueado", "restringido"):
-                                    print(f"[AutomationEngine] 🚫 BLOQUEO confirmado al intentar recuperar '{acc_id}'.")
-                                    runner.close_instance(acc_id)
-                                    with blocked_lock:
-                                        blocked_history_accounts.add(acc_id)
-                                    if db_st_rec not in ("bloqueado", "restringido"):
-                                        db.update_account_state(acc_id, "bloqueado", notes="Bloqueado al intentar recuperar sesión.", force=True)
-                                    return False
-                                time.sleep(2)
-                                wait_conn += 2
-
-                            if not reconnected:
-                                print(f"[AutomationEngine] ❌ '{acc_id}' no logró reconectarse en reintento ({attempt}/{max_retries}).")
-                                continue
-
-                            print(f"[AutomationEngine] 🔄 REINTENTO ({attempt}/{max_retries}) de envío de historial en '{acc_id}' → '{target_name}'...")
-                            ok_retry = runner.send_warmup_peer_message(acc_id, target_name, text, target_phone=target_phone)
-
-                            if ok_retry:
-                                print(f"[AutomationEngine] ✅ Recuperación exitosa para '{acc_id}'. Historial enviado en reintento {attempt}/{max_retries}.")
-                                recovered = True
-                                break
-
-                            h_post_retry = runner.active_instances.get(acc_id, {}).get("status", "")
-                            db_h_retry = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-                            if h_post_retry == "BLOQUEADA" or db_h_retry in ("bloqueado", "restringido"):
-                                print(f"[AutomationEngine] 🚫 BLOQUEO detectado durante reintento en '{acc_id}'.")
-                                runner.close_instance(acc_id)
-                                with blocked_lock:
-                                    blocked_history_accounts.add(acc_id)
-                                if db_h_retry not in ("bloqueado", "restringido"):
-                                    db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante reintento en historial.", force=True)
-                                return False
-
-                        if not recovered:
-                            print(f"[AutomationEngine] 🚫 Fallo persistente tras {max_retries} reintentos en historial de '{acc_id}'. Marcando como bloqueado.")
-                            runner.close_instance(acc_id)
-                            with blocked_lock:
-                                blocked_history_accounts.add(acc_id)
-                            db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente tras {max_retries} reintentos en historial.", force=True)
-                            return False
+                        print(f"[AutomationEngine] ℹ️ Contacto '{target_name}' no encontrado en WhatsApp Web de '{acc_id}'. Omitiendo y pasando a otro contacto al azar...")
+                        peer_accounts = [p for p in peer_accounts if p["full_name"] != target_name]
+                        if not peer_accounts:
+                            print(f"[AutomationEngine] ⚠️ '{acc_id}' sin mas contactos amigos disponibles en este turno.")
+                            break
+                        continue
 
                 human_delay(10, 20)
 
