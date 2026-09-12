@@ -543,20 +543,42 @@ class AutomationEngine:
         except Exception as scan_err:
             print(f"[AutomationEngine] Nota en escaneo historial '{acc_id}': {scan_err}")
 
-        # 2. Enviar mensajes de calentamiento a cuentas amigas
-        my_phone = all_states.get(acc_id, {}).get("phone", "")
-        available_peers = [p for p in peer_phones if p and p != my_phone]
+        # 2. Enviar mensajes de calentamiento a cuentas amigas (buscando por NOMBRE y APELLIDO)
+        peer_accounts = []
+        for p_id, p_info in all_states.items():
+            if p_id == acc_id:
+                continue
+            fn = (p_info.get("first_name") or "").strip()
+            ln = (p_info.get("last_name") or "").strip()
+            phone = (p_info.get("phone") or "").strip()
 
-        if not available_peers:
-            print(f"[AutomationEngine] ⚠️ [Historial] '{acc_id}' sin cuentas amigas con teléfono en BD. Esperando...")
+            if not fn or not ln:
+                db.update_account_state(p_id, p_info.get("status_state", "disponible"))
+                refreshed = db.get_all_account_states().get(p_id, {})
+                fn = (refreshed.get("first_name") or "").strip()
+                ln = (refreshed.get("last_name") or "").strip()
+
+            full_name = f"{fn} {ln}".strip()
+            if full_name:
+                peer_accounts.append({
+                    "account_id": p_id,
+                    "full_name": full_name,
+                    "phone": phone
+                })
+
+        if not peer_accounts:
+            print(f"[AutomationEngine] ⚠️ [Historial] '{acc_id}' sin cuentas amigas en BD. Esperando...")
         elif history_msgs_per_turn > 0:
             for _ in range(history_msgs_per_turn):
                 if self.job_stop_flags.get(job_id, False):
                     break
-                target = random.choice(available_peers)
+                target_acc = random.choice(peer_accounts)
+                target_name = target_acc["full_name"]
+                target_phone = target_acc["phone"]
                 text = random.choice(warmup_phrases)
-                print(f"[AutomationEngine] 💬 [Historial] [{acc_id}] → cuenta amiga {target}")
-                ok = runner.send_warmup_peer_message(acc_id, target, text)
+
+                print(f"[AutomationEngine] 💬 [Historial] [{acc_id}] → cuenta amiga '{target_name}' (Tel: {target_phone})")
+                ok = runner.send_warmup_peer_message(acc_id, target_name, text, target_phone=target_phone)
 
                 if not ok:
                     h_post_status = runner.active_instances.get(acc_id, {}).get("status", "")
@@ -604,8 +626,8 @@ class AutomationEngine:
                                 print(f"[AutomationEngine] ❌ '{acc_id}' no logró reconectarse en reintento ({attempt}/{max_retries}).")
                                 continue
 
-                            print(f"[AutomationEngine] 🔄 REINTENTO ({attempt}/{max_retries}) de envío de historial en '{acc_id}' → {target}...")
-                            ok_retry = runner.send_warmup_peer_message(acc_id, target, text)
+                            print(f"[AutomationEngine] 🔄 REINTENTO ({attempt}/{max_retries}) de envío de historial en '{acc_id}' → '{target_name}'...")
+                            ok_retry = runner.send_warmup_peer_message(acc_id, target_name, text, target_phone=target_phone)
 
                             if ok_retry:
                                 print(f"[AutomationEngine] ✅ Recuperación exitosa para '{acc_id}'. Historial enviado en reintento {attempt}/{max_retries}.")
