@@ -54,11 +54,16 @@ def main():
     # Merge main into release
     run_cmd(["git", "merge", "main", "--no-edit"], cwd=str(ROOT_DIR), check=False)
 
-    # Remove uncompiled /frontend from release branch (so end-user bundle is lightweight)
+    # Remove uncompiled /frontend and dev scripts (deploy_release.*) from release branch
+    print("  🧹 Limpiando fuentes y scripts de desarrollo de la rama release...")
     if (ROOT_DIR / "frontend").exists():
-        print("  🧹 Limpiando archivos fuente de desarrollo de la rama release...")
-        subprocess.run(["git", "rm", "-r", "frontend"], cwd=str(ROOT_DIR), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "release: paquete optimizado sin fuentes de desarrollo"], cwd=str(ROOT_DIR), capture_output=True)
+        subprocess.run(["git", "rm", "-r", "-f", "frontend"], cwd=str(ROOT_DIR), capture_output=True)
+    if (ROOT_DIR / "deploy_release.py").exists():
+        subprocess.run(["git", "rm", "-f", "deploy_release.py"], cwd=str(ROOT_DIR), capture_output=True)
+    if (ROOT_DIR / "deploy_release.bat").exists():
+        subprocess.run(["git", "rm", "-f", "deploy_release.bat"], cwd=str(ROOT_DIR), capture_output=True)
+        
+    subprocess.run(["git", "commit", "-m", "release: paquete limpio de producción para usuario final"], cwd=str(ROOT_DIR), capture_output=True)
 
     # 4. Push release branch to origin
     print("\n[4/5] Publicando la rama 'release' en GitHub...")
