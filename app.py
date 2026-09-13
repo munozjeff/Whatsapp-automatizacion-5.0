@@ -629,25 +629,35 @@ def delete_automation_job(job_id):
 # ── SISTEMA DE ACTUALIZACIONES GIT DE 1-CLICK ───────────────────────────
 @app.route("/api/updates/check", methods=["GET"])
 def check_for_updates():
+    git_dir = Path(__file__).parent / ".git"
+    if not git_dir.exists():
+        return jsonify({
+            "status": "success",
+            "update_available": False,
+            "is_git_repo": False,
+            "message": "Instalación en modo ejecutable ZIP local (sin Git)."
+        })
+
     try:
         # Fetch remote updates silently with timeout
         subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
-        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip() or "main"
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or "release"
         
         # Local commit hash
-        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
         # Remote commit hash for current branch
-        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True).strip()
+        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True, stderr=subprocess.DEVNULL).strip()
         
         if local_hash != remote_hash:
             # Get pending commit messages
             commit_logs = subprocess.check_output(
-                ["git", "log", f"HEAD..origin/{current_branch}", "--oneline", "-n", "10"], text=True
+                ["git", "log", f"HEAD..origin/{current_branch}", "--oneline", "-n", "10"], text=True, stderr=subprocess.DEVNULL
             ).strip().split("\n")
             
             return jsonify({
                 "status": "success",
                 "update_available": True,
+                "is_git_repo": True,
                 "branch": current_branch,
                 "local_commit": local_hash,
                 "remote_commit": remote_hash,
@@ -658,6 +668,7 @@ def check_for_updates():
         return jsonify({
             "status": "success",
             "update_available": False,
+            "is_git_repo": True,
             "branch": current_branch,
             "local_commit": local_hash,
             "remote_commit": remote_hash,
@@ -668,8 +679,9 @@ def check_for_updates():
         return jsonify({
             "status": "error",
             "update_available": False,
-            "message": f"Error al verificar actualizaciones: {str(e)}"
-        }), 500
+            "is_git_repo": False,
+            "message": "No se pudo conectar con Git para consultar actualizaciones."
+        }), 200
 
 
 @app.route("/api/updates/apply", methods=["POST"])
