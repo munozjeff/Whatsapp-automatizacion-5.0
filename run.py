@@ -76,18 +76,23 @@ def init_database():
 
 def check_git_updates_on_startup():
     print("\n[4/5] Verificando si existen actualizaciones en el repositorio remoto Git...")
+    git_dir = ROOT_DIR / ".git"
+    if not git_dir.exists():
+        print("  ℹ️ El sistema se está ejecutando desde un archivo comprimido ZIP (sin repositorio Git activo).")
+        return
+
     try:
         subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
-        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip() or "main"
-        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True).strip()
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or "release"
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True, stderr=subprocess.DEVNULL).strip()
         if local_hash != remote_hash:
             print(f"  🔔 ¡NUEVA ACTUALIZACIÓN DISPONIBLE EN GITHUB [{current_branch}]! ({local_hash} -> {remote_hash})")
             print("  💡 Podrás descargarla e instalarla con 1 solo click desde la interfaz web.")
         else:
             print(f"  ✅ El sistema está completamente actualizado en la rama [{current_branch}] ({local_hash}).")
     except Exception as e:
-        print(f"  ⚠️ No se pudo verificar la actualización remota: {e}")
+        print(f"  ⚠️ No se pudo verificar la actualización remota de Git.")
 
 def run_application():
     print("\n[5/5] Iniciando el servidor Backend Flask en http://127.0.0.1:5000...")
