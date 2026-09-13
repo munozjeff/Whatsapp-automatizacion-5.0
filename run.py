@@ -1,9 +1,19 @@
 import os
 import sys
+import io
 import subprocess
 import webbrowser
 import time
 from pathlib import Path
+
+# Force UTF-8 encoding on Windows console streams to prevent UnicodeEncodeError with emojis
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except AttributeError:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 ROOT_DIR = Path(__file__).parent.resolve()
 
