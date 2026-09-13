@@ -252,6 +252,23 @@ export default function Automation({ activeTab }) {
   };
 
   /* ── Available accounts (not blocked/restricted) ── */
+  /* ── Account Status Counts (Real-Time) ──────── */
+  const availableCount = accounts.filter(
+    (a) => a.status_state === 'disponible' || (!a.status_state && !a.is_blocked)
+  ).length;
+
+  const blockedCount = accounts.filter(
+    (a) => a.status_state === 'bloqueado' || a.is_blocked
+  ).length;
+
+  const restrictedCount = accounts.filter(
+    (a) => a.status_state === 'restringido'
+  ).length;
+
+  const activeCount = accounts.filter(
+    (a) => a.is_active || a.status_state === 'enviando' || a.status_state === 'haciendo_historial'
+  ).length;
+
   const availableAccounts = accounts.filter(
     (a) => a.status_state !== 'bloqueado' && a.status_state !== 'restringido'
   );
@@ -273,6 +290,51 @@ export default function Automation({ activeTab }) {
             ← Nueva configuración
           </button>
         )}
+      </div>
+
+      {/* Barra de métricas de cuentas en tiempo real */}
+      <div className="automation-realtime-bar">
+        <div className="rt-bar-title">
+          <span className="live-dot pulse">●</span>
+          <span>Monitoreo de Cuentas en Tiempo Real:</span>
+        </div>
+        <div className="rt-metrics-grid">
+          <div className="rt-metric-card metric-available">
+            <span className="rt-metric-icon">🟢</span>
+            <div className="rt-metric-info">
+              <span className="rt-metric-val">{availableCount}</span>
+              <span className="rt-metric-lbl">Disponibles</span>
+            </div>
+          </div>
+          <div className="rt-metric-card metric-blocked">
+            <span className="rt-metric-icon">🔴</span>
+            <div className="rt-metric-info">
+              <span className="rt-metric-val">{blockedCount}</span>
+              <span className="rt-metric-lbl">Bloqueadas</span>
+            </div>
+          </div>
+          <div className="rt-metric-card metric-restricted">
+            <span className="rt-metric-icon">🟡</span>
+            <div className="rt-metric-info">
+              <span className="rt-metric-val">{restrictedCount}</span>
+              <span className="rt-metric-lbl">Restringidas</span>
+            </div>
+          </div>
+          <div className="rt-metric-card metric-active">
+            <span className="rt-metric-icon">⚡</span>
+            <div className="rt-metric-info">
+              <span className="rt-metric-val">{activeCount}</span>
+              <span className="rt-metric-lbl">En Ejecución</span>
+            </div>
+          </div>
+          <div className="rt-metric-card metric-total">
+            <span className="rt-metric-icon">📱</span>
+            <div className="rt-metric-info">
+              <span className="rt-metric-val">{accounts.length}</span>
+              <span className="rt-metric-lbl">Total Registradas</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ═══════════════════════════════════════

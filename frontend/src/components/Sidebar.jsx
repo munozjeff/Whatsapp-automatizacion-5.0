@@ -1,4 +1,5 @@
 import React from 'react';
+import UpdateManager from './UpdateManager';
 
 export default function Sidebar({ activeTab, setActiveTab }) {
   const navItems = [
@@ -78,6 +79,8 @@ export default function Sidebar({ activeTab, setActiveTab }) {
           </button>
         ))}
       </nav>
+
+      <UpdateManager />
 
       <div className="sidebar-footer">
         <div className="sys-status">

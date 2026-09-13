@@ -5,6 +5,7 @@ import io
 import csv
 import random
 import asyncio
+import subprocess
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
@@ -625,6 +626,83 @@ def delete_automation_job(job_id):
         return jsonify({"status": "success", "message": f"Job #{job_id} eliminado."})
     return jsonify({"status": "error", "message": "No se pudo eliminar el job."}), 400
 
+# ── SISTEMA DE ACTUALIZACIONES GIT DE 1-CLICK ───────────────────────────
+@app.route("/api/updates/check", methods=["GET"])
+def check_for_updates():
+    try:
+        # Fetch remote updates silently with timeout
+        subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
+        
+        # Local commit hash
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        # Remote commit hash
+        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], text=True).strip()
+        
+        if local_hash != remote_hash:
+            # Get pending commit messages
+            commit_logs = subprocess.check_output(
+                ["git", "log", "HEAD..origin/main", "--oneline", "-n", "10"], text=True
+            ).strip().split("\n")
+            
+            return jsonify({
+                "status": "success",
+                "update_available": True,
+                "local_commit": local_hash,
+                "remote_commit": remote_hash,
+                "behind_count": len(commit_logs),
+                "commit_messages": [msg.strip() for msg in commit_logs if msg.strip()]
+            })
+        
+        return jsonify({
+            "status": "success",
+            "update_available": False,
+            "local_commit": local_hash,
+            "remote_commit": remote_hash,
+            "behind_count": 0,
+            "commit_messages": []
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "update_available": False,
+            "message": f"Error al verificar actualizaciones: {str(e)}"
+        }), 500
+
+
+@app.route("/api/updates/apply", methods=["POST"])
+def apply_updates():
+    try:
+        # 1. Pull latest code
+        pull_res = subprocess.run(["git", "pull", "origin", "main"], capture_output=True, text=True, timeout=30)
+        if pull_res.returncode != 0:
+            return jsonify({
+                "status": "error",
+                "message": f"Error al ejecutar git pull: {pull_res.stderr or pull_res.stdout}"
+            }), 500
+        
+        # 2. Rebuild frontend if frontend directory exists
+        frontend_dir = Path(__file__).parent / "frontend"
+        build_output = ""
+        if frontend_dir.exists():
+            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+            build_res = subprocess.run(
+                [npm_cmd, "run", "build"], cwd=str(frontend_dir), capture_output=True, text=True, timeout=60
+            )
+            build_output = build_res.stdout or build_res.stderr
+        
+        return jsonify({
+            "status": "success",
+            "message": "¡Sistema actualizado correctamente con 1 solo click!",
+            "git_output": pull_res.stdout,
+            "build_output": build_output
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Excepción durante la actualización: {str(e)}"
+        }), 500
+
 if __name__ == "__main__":
     print("Starting WhatsApp Multi-Account Platform on http://127.0.0.1:5000")
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+

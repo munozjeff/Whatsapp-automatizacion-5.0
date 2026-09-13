@@ -55,7 +55,7 @@ def build_frontend_if_needed():
         print("  ⚠️ No se encontró la carpeta frontend ni static/dist.")
 
 def init_database():
-    print("\n[3/4] Verificando e inicializando la Base de Datos SQLite...")
+    print("\n[3/5] Verificando e inicializando la Base de Datos SQLite...")
     try:
         import database as db
         db.init_db()
@@ -64,8 +64,22 @@ def init_database():
         print(f"  ❌ Error al inicializar la base de datos: {e}")
         sys.exit(1)
 
+def check_git_updates_on_startup():
+    print("\n[4/5] Verificando si existen actualizaciones en el repositorio remoto Git...")
+    try:
+        subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
+        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], text=True).strip()
+        if local_hash != remote_hash:
+            print(f"  🔔 ¡NUEVA ACTUALIZACIÓN DISPONIBLE EN GITHUB! ({local_hash} -> {remote_hash})")
+            print("  💡 Podrás descargarla e instalarla con 1 solo click desde la interfaz web.")
+        else:
+            print(f"  ✅ El sistema está completamente actualizado ({local_hash}).")
+    except Exception as e:
+        print(f"  ⚠️ No se pudo verificar la actualización remota: {e}")
+
 def run_application():
-    print("\n[4/4] Iniciando el servidor Backend Flask en http://127.0.0.1:5000...")
+    print("\n[5/5] Iniciando el servidor Backend Flask en http://127.0.0.1:5000...")
     print("  🌐 La interfaz web se abrirá automáticamente en tu navegador.\n")
     
     def open_browser():
@@ -83,4 +97,6 @@ if __name__ == "__main__":
     check_python_dependencies()
     build_frontend_if_needed()
     init_database()
+    check_git_updates_on_startup()
     run_application()
+
