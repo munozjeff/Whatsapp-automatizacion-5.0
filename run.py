@@ -78,13 +78,14 @@ def check_git_updates_on_startup():
     print("\n[4/5] Verificando si existen actualizaciones en el repositorio remoto Git...")
     try:
         subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip() or "main"
         local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], text=True).strip()
+        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True).strip()
         if local_hash != remote_hash:
-            print(f"  🔔 ¡NUEVA ACTUALIZACIÓN DISPONIBLE EN GITHUB! ({local_hash} -> {remote_hash})")
+            print(f"  🔔 ¡NUEVA ACTUALIZACIÓN DISPONIBLE EN GITHUB [{current_branch}]! ({local_hash} -> {remote_hash})")
             print("  💡 Podrás descargarla e instalarla con 1 solo click desde la interfaz web.")
         else:
-            print(f"  ✅ El sistema está completamente actualizado ({local_hash}).")
+            print(f"  ✅ El sistema está completamente actualizado en la rama [{current_branch}] ({local_hash}).")
     except Exception as e:
         print(f"  ⚠️ No se pudo verificar la actualización remota: {e}")
 

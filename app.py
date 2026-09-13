@@ -632,21 +632,23 @@ def check_for_updates():
     try:
         # Fetch remote updates silently with timeout
         subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip() or "main"
         
         # Local commit hash
         local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-        # Remote commit hash
-        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/main"], text=True).strip()
+        # Remote commit hash for current branch
+        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True).strip()
         
         if local_hash != remote_hash:
             # Get pending commit messages
             commit_logs = subprocess.check_output(
-                ["git", "log", "HEAD..origin/main", "--oneline", "-n", "10"], text=True
+                ["git", "log", f"HEAD..origin/{current_branch}", "--oneline", "-n", "10"], text=True
             ).strip().split("\n")
             
             return jsonify({
                 "status": "success",
                 "update_available": True,
+                "branch": current_branch,
                 "local_commit": local_hash,
                 "remote_commit": remote_hash,
                 "behind_count": len(commit_logs),
@@ -656,6 +658,7 @@ def check_for_updates():
         return jsonify({
             "status": "success",
             "update_available": False,
+            "branch": current_branch,
             "local_commit": local_hash,
             "remote_commit": remote_hash,
             "behind_count": 0,
@@ -672,15 +675,16 @@ def check_for_updates():
 @app.route("/api/updates/apply", methods=["POST"])
 def apply_updates():
     try:
-        # 1. Pull latest code
-        pull_res = subprocess.run(["git", "pull", "origin", "main"], capture_output=True, text=True, timeout=30)
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip() or "main"
+        # 1. Pull latest code for current branch
+        pull_res = subprocess.run(["git", "pull", "origin", current_branch], capture_output=True, text=True, timeout=30)
         if pull_res.returncode != 0:
             return jsonify({
                 "status": "error",
-                "message": f"Error al ejecutar git pull: {pull_res.stderr or pull_res.stdout}"
+                "message": f"Error al ejecutar git pull origin {current_branch}: {pull_res.stderr or pull_res.stdout}"
             }), 500
         
-        # 2. Rebuild frontend if frontend directory exists
+        # 2. Rebuild frontend if frontend directory exists (dev environment)
         frontend_dir = Path(__file__).parent / "frontend"
         build_output = ""
         if frontend_dir.exists():
@@ -692,7 +696,8 @@ def apply_updates():
         
         return jsonify({
             "status": "success",
-            "message": "¡Sistema actualizado correctamente con 1 solo click!",
+            "message": f"¡Sistema actualizado correctamente en la rama [{current_branch}]!",
+            "branch": current_branch,
             "git_output": pull_res.stdout,
             "build_output": build_output
         })
