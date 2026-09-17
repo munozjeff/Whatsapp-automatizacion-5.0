@@ -74,25 +74,50 @@ def init_database():
         print(f"  ❌ Error al inicializar la base de datos: {e}")
         sys.exit(1)
 
+def ensure_git_repo(root_dir: Path) -> bool:
+    git_dir = root_dir / ".git"
+    if git_dir.exists():
+        return True
+    try:
+        res = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
+        if res.returncode != 0:
+            return False
+        print("  ⏳ Inicializando repositorio Git local para actualizaciones de 1-click...")
+        subprocess.run(["git", "init"], cwd=str(root_dir), capture_output=True, check=True)
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True, check=False)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True, check=False)
+        subprocess.run(["git", "checkout", "-B", "release", "origin/release"], cwd=str(root_dir), capture_output=True, check=False)
+        return git_dir.exists()
+    except Exception:
+        return False
+
 def check_git_updates_on_startup():
     print("\n[4/5] Verificando si existen actualizaciones en el repositorio remoto Git...")
     git_dir = ROOT_DIR / ".git"
     if not git_dir.exists():
-        print("  ℹ️ El sistema se está ejecutando desde un archivo comprimido ZIP (sin repositorio Git activo).")
-        return
+        if not ensure_git_repo(ROOT_DIR):
+            print("  ℹ️ El sistema se está ejecutando en modo ejecutable ZIP local (sin Git CLI instalado).")
+            return
 
     try:
-        subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
-        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or "release"
-        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
-        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True, stderr=subprocess.DEVNULL).strip()
+        subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(ROOT_DIR), capture_output=True)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(ROOT_DIR), capture_output=True, text=True, timeout=12)
+        
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(ROOT_DIR), text=True, stderr=subprocess.DEVNULL).strip() or "release"
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(ROOT_DIR), text=True, stderr=subprocess.DEVNULL).strip()
+        
+        try:
+            remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], cwd=str(ROOT_DIR), text=True, stderr=subprocess.DEVNULL).strip()
+        except Exception:
+            remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/release"], cwd=str(ROOT_DIR), text=True, stderr=subprocess.DEVNULL).strip()
+
         if local_hash != remote_hash:
             print(f"  🔔 ¡NUEVA ACTUALIZACIÓN DISPONIBLE EN GITHUB [{current_branch}]! ({local_hash} -> {remote_hash})")
             print("  💡 Podrás descargarla e instalarla con 1 solo click desde la interfaz web.")
         else:
             print(f"  ✅ El sistema está completamente actualizado en la rama [{current_branch}] ({local_hash}).")
     except Exception as e:
-        print(f"  ⚠️ No se pudo verificar la actualización remota de Git.")
+        print(f"  ⚠️ No se pudo verificar la actualización remota de Git: {e}")
 
 def run_application():
     print("\n[5/5] Iniciando el servidor Backend Flask en http://127.0.0.1:5000...")

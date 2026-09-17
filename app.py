@@ -632,33 +632,80 @@ def delete_automation_job(job_id):
     return jsonify({"status": "error", "message": "No se pudo eliminar el job."}), 400
 
 # ── SISTEMA DE ACTUALIZACIONES GIT DE 1-CLICK ───────────────────────────
+def ensure_git_repo_app():
+    root_dir = Path(__file__).parent.resolve()
+    git_dir = root_dir / ".git"
+    if git_dir.exists():
+        return True
+    try:
+        res = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
+        if res.returncode != 0:
+            return False
+        subprocess.run(["git", "init"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "checkout", "-B", "release", "origin/release"], cwd=str(root_dir), capture_output=True)
+        return git_dir.exists()
+    except Exception:
+        return False
+
 @app.route("/api/updates/check", methods=["GET"])
 def check_for_updates():
-    git_dir = Path(__file__).parent / ".git"
+    root_dir = Path(__file__).parent.resolve()
+    if not (root_dir / ".git").exists():
+        ensure_git_repo_app()
+
+    git_dir = root_dir / ".git"
     if not git_dir.exists():
-        return jsonify({
-            "status": "success",
-            "update_available": False,
-            "is_git_repo": False,
-            "message": "Instalación en modo ejecutable ZIP local (sin Git)."
-        })
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://api.github.com/repos/munozjeff/Whatsapp-automatizacion-5.0/commits/release",
+                headers={"User-Agent": "WhatsAppAutoPlatform"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                import json
+                data = json.loads(response.read().decode('utf-8'))
+                remote_sha = data.get("sha", "")[:7]
+                commit_msg = data.get("commit", {}).get("message", "").split("\n")[0]
+                return jsonify({
+                    "status": "success",
+                    "update_available": True,
+                    "is_git_repo": False,
+                    "branch": "release",
+                    "remote_commit": remote_sha,
+                    "behind_count": 1,
+                    "commit_messages": [f"Actualización remota disponible: {commit_msg}"],
+                    "message": "Actualización disponible en GitHub."
+                })
+        except Exception:
+            return jsonify({
+                "status": "success",
+                "update_available": False,
+                "is_git_repo": False,
+                "message": "Instalación local. Para habilitar actualizaciones en 1-click, instala Git CLI en tu equipo."
+            })
 
     try:
-        # Fetch remote updates silently with timeout
-        subprocess.run(["git", "fetch", "origin"], capture_output=True, text=True, timeout=8)
-        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or "release"
+        subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True, text=True, timeout=10)
         
-        # Local commit hash
-        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
-        # Remote commit hash for current branch
-        remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], text=True, stderr=subprocess.DEVNULL).strip()
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip() or "release"
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip()
         
+        try:
+            remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip()
+        except Exception:
+            remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/release"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip()
+
         if local_hash != remote_hash:
-            # Get pending commit messages
-            commit_logs = subprocess.check_output(
-                ["git", "log", f"HEAD..origin/{current_branch}", "--oneline", "-n", "10"], text=True, stderr=subprocess.DEVNULL
-            ).strip().split("\n")
-            
+            try:
+                commit_logs = subprocess.check_output(
+                    ["git", "log", f"HEAD..origin/{current_branch}", "--oneline", "-n", "10"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL
+                ).strip().split("\n")
+            except Exception:
+                commit_logs = [f"Actualización remota disponible: {remote_hash}"]
+
             return jsonify({
                 "status": "success",
                 "update_available": True,
@@ -669,7 +716,7 @@ def check_for_updates():
                 "behind_count": len(commit_logs),
                 "commit_messages": [msg.strip() for msg in commit_logs if msg.strip()]
             })
-        
+
         return jsonify({
             "status": "success",
             "update_available": False,
@@ -684,25 +731,37 @@ def check_for_updates():
         return jsonify({
             "status": "error",
             "update_available": False,
-            "is_git_repo": False,
-            "message": "No se pudo conectar con Git para consultar actualizaciones."
+            "is_git_repo": True,
+            "message": f"Error al verificar actualizaciones: {str(e)}"
         }), 200
 
 
 @app.route("/api/updates/apply", methods=["POST"])
 def apply_updates():
+    root_dir = Path(__file__).parent.resolve()
+    if not (root_dir / ".git").exists():
+        ensure_git_repo_app()
+
+    if not (root_dir / ".git").exists():
+        return jsonify({
+            "status": "error",
+            "message": "No se pudo inicializar Git. Por favor instala Git en tu equipo o clona el repositorio desde GitHub para usar actualizaciones de 1-click."
+        }), 400
+
     try:
-        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip() or "main"
-        # 1. Pull latest code for current branch
-        pull_res = subprocess.run(["git", "pull", "origin", current_branch], capture_output=True, text=True, timeout=30)
-        if pull_res.returncode != 0:
-            return jsonify({
-                "status": "error",
-                "message": f"Error al ejecutar git pull origin {current_branch}: {pull_res.stderr or pull_res.stdout}"
-            }), 500
-        
-        # 2. Rebuild frontend if frontend directory exists (dev environment)
-        frontend_dir = Path(__file__).parent / "frontend"
+        subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True, timeout=15)
+
+        try:
+            current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(root_dir), text=True).strip() or "release"
+        except Exception:
+            current_branch = "release"
+
+        res = subprocess.run(["git", "reset", "--hard", f"origin/{current_branch}"], cwd=str(root_dir), capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            res = subprocess.run(["git", "reset", "--hard", "origin/release"], cwd=str(root_dir), capture_output=True, text=True, timeout=30)
+
+        frontend_dir = root_dir / "frontend"
         build_output = ""
         if frontend_dir.exists():
             npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
@@ -710,12 +769,12 @@ def apply_updates():
                 [npm_cmd, "run", "build"], cwd=str(frontend_dir), capture_output=True, text=True, timeout=60
             )
             build_output = build_res.stdout or build_res.stderr
-        
+
         return jsonify({
             "status": "success",
-            "message": f"¡Sistema actualizado correctamente en la rama [{current_branch}]!",
+            "message": f"¡Sistema actualizado correctamente en 1-click!",
             "branch": current_branch,
-            "git_output": pull_res.stdout,
+            "git_output": res.stdout,
             "build_output": build_output
         })
     except Exception as e:
