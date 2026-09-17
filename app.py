@@ -783,7 +783,71 @@ def apply_updates():
             "message": f"Excepción durante la actualización: {str(e)}"
         }), 500
 
+def check_python_dependencies_app():
+    root_dir = Path(__file__).parent.resolve()
+    req_file = root_dir / "requirements.txt"
+    if req_file.exists():
+        try:
+            import flask
+            import flask_cors
+            import playwright
+        except ImportError:
+            print("  ⏳ Instalando dependencias de Python desde requirements.txt...")
+            subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(req_file)], check=True)
+
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], capture_output=True, check=False)
+    except Exception:
+        pass
+
+def check_git_updates_startup_app():
+    root_dir = Path(__file__).parent.resolve()
+    print("\n[4/5] Verificando si existen actualizaciones en el repositorio remoto Git...")
+    git_dir = root_dir / ".git"
+    if not git_dir.exists():
+        if not ensure_git_repo_app():
+            print("  ℹ️ El sistema se está ejecutando en modo ejecutable ZIP local (sin Git CLI instalado).")
+            return
+
+    try:
+        subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True, text=True, timeout=12)
+        
+        current_branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip() or "release"
+        local_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip()
+        
+        try:
+            remote_hash = subprocess.check_output(["git", "rev-parse", "--short", f"origin/{current_branch}"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip()
+        except Exception:
+            remote_hash = subprocess.check_output(["git", "rev-parse", "--short", "origin/release"], cwd=str(root_dir), text=True, stderr=subprocess.DEVNULL).strip()
+
+        if local_hash != remote_hash:
+            print(f"  🔔 ¡NUEVA ACTUALIZACIÓN DISPONIBLE EN GITHUB [{current_branch}]! ({local_hash} -> {remote_hash})")
+            print("  💡 Podrás descargarla e instalarla con 1 solo click desde la interfaz web.")
+        else:
+            print(f"  ✅ El sistema está completamente actualizado en la rama [{current_branch}] ({local_hash}).")
+    except Exception as e:
+        print(f"  ⚠️ No se pudo verificar la actualización remota de Git.")
+
 if __name__ == "__main__":
-    print("Starting WhatsApp Multi-Account Platform on http://127.0.0.1:5000")
+    print("=" * 65)
+    print("🚀 WhatsApp Multi-Account Platform v5.0")
+    print("   Orquestador de Automatización & Gestión de Cuentas")
+    print("=" * 65)
+    
+    check_python_dependencies_app()
+    check_git_updates_startup_app()
+
+    print("\n🌐 Iniciando el servidor Backend Flask en http://127.0.0.1:5000...")
+    print("  La interfaz web se abrirá automáticamente en tu navegador.\n")
+
+    def open_browser():
+        import time, webbrowser
+        time.sleep(1.5)
+        webbrowser.open("http://127.0.0.1:5000")
+
+    import threading
+    threading.Thread(target=open_browser, daemon=True).start()
+
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
 

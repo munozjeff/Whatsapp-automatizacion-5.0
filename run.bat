@@ -18,10 +18,10 @@ if errorlevel 1 (
 )
 echo OK - Python detectado correctamente.
 
-REM [2/2] Ejecutando el orquestador principal (run.py)
+REM [2/2] Ejecutando el orquestador principal (app.py)
 echo.
 echo [2/2] Iniciando plataforma y servidor web en http://127.0.0.1:5000 ...
-python run.py
+python app.py
 
 if errorlevel 1 (
     echo.
