@@ -631,32 +631,53 @@ def delete_automation_job(job_id):
         return jsonify({"status": "success", "message": f"Job #{job_id} eliminado."})
     return jsonify({"status": "error", "message": "No se pudo eliminar el job."}), 400
 
-# ── SISTEMA DE ACTUALIZACIONES GIT DE 1-CLICK ───────────────────────────
 def ensure_git_repo_app():
     root_dir = Path(__file__).parent.resolve()
     git_dir = root_dir / ".git"
+
     if git_dir.exists():
-        return True
+        try:
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(root_dir), stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            pass
+
     try:
         res = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
         if res.returncode != 0:
             return False
-        subprocess.run(["git", "init"], cwd=str(root_dir), capture_output=True)
+
+        if not git_dir.exists():
+            subprocess.run(["git", "init"], cwd=str(root_dir), capture_output=True, check=True)
+
+        subprocess.run(["git", "remote", "remove", "origin"], cwd=str(root_dir), capture_output=True)
         subprocess.run(["git", "remote", "add", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
-        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True)
-        subprocess.run(["git", "checkout", "-B", "release", "origin/release"], cwd=str(root_dir), capture_output=True)
-        return git_dir.exists()
-    except Exception:
+        subprocess.run(["git", "fetch", "origin"], cwd=str(root_dir), capture_output=True, timeout=15)
+
+        subprocess.run(["git", "checkout", "-f", "-B", "release", "origin/release"], cwd=str(root_dir), capture_output=True)
+        subprocess.run(["git", "reset", "--hard", "origin/release"], cwd=str(root_dir), capture_output=True)
+
+        subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(root_dir), stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"  ⚠️ Error vinculando repositorio Git local: {e}")
         return False
 
 @app.route("/api/updates/check", methods=["GET"])
 def check_for_updates():
     root_dir = Path(__file__).parent.resolve()
-    if not (root_dir / ".git").exists():
-        ensure_git_repo_app()
+    ensure_git_repo_app()
 
     git_dir = root_dir / ".git"
-    if not git_dir.exists():
+    has_valid_git = False
+    if git_dir.exists():
+        try:
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(root_dir), stderr=subprocess.DEVNULL)
+            has_valid_git = True
+        except Exception:
+            has_valid_git = False
+
+    if not has_valid_git:
         try:
             import urllib.request
             req = urllib.request.Request(
@@ -683,7 +704,7 @@ def check_for_updates():
                 "status": "success",
                 "update_available": False,
                 "is_git_repo": False,
-                "message": "Instalación local. Para habilitar actualizaciones en 1-click, instala Git CLI en tu equipo."
+                "message": "Instalación local ZIP. Para habilitar actualizaciones en 1-click, instala Git CLI en tu equipo."
             })
 
     try:
@@ -739,14 +760,7 @@ def check_for_updates():
 @app.route("/api/updates/apply", methods=["POST"])
 def apply_updates():
     root_dir = Path(__file__).parent.resolve()
-    if not (root_dir / ".git").exists():
-        ensure_git_repo_app()
-
-    if not (root_dir / ".git").exists():
-        return jsonify({
-            "status": "error",
-            "message": "No se pudo inicializar Git. Por favor instala Git en tu equipo o clona el repositorio desde GitHub para usar actualizaciones de 1-click."
-        }), 400
+    ensure_git_repo_app()
 
     try:
         subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
@@ -803,11 +817,9 @@ def check_python_dependencies_app():
 def check_git_updates_startup_app():
     root_dir = Path(__file__).parent.resolve()
     print("\n[4/5] Verificando si existen actualizaciones en el repositorio remoto Git...")
-    git_dir = root_dir / ".git"
-    if not git_dir.exists():
-        if not ensure_git_repo_app():
-            print("  ℹ️ El sistema se está ejecutando en modo ejecutable ZIP local (sin Git CLI instalado).")
-            return
+    if not ensure_git_repo_app():
+        print("  ℹ️ El sistema se está ejecutando en modo ejecutable ZIP local (sin Git CLI instalado).")
+        return
 
     try:
         subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/munozjeff/Whatsapp-automatizacion-5.0.git"], cwd=str(root_dir), capture_output=True)
@@ -827,7 +839,7 @@ def check_git_updates_startup_app():
         else:
             print(f"  ✅ El sistema está completamente actualizado en la rama [{current_branch}] ({local_hash}).")
     except Exception as e:
-        print(f"  ⚠️ No se pudo verificar la actualización remota de Git.")
+        print(f"  ⚠️ No se pudo verificar la actualización remota de Git: {e}")
 
 if __name__ == "__main__":
     print("=" * 65)
