@@ -515,6 +515,16 @@ def resolve_client_notification(notification_id: int) -> bool:
     conn.close()
     return affected
 
+@_db_retry
+def resolve_all_client_notifications() -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE client_notifications SET status = 'resolved' WHERE status = 'pending'")
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected
+
 
 # --- CRUD AUTOMATION JOBS ---
 

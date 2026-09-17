@@ -849,32 +849,97 @@ class WhatsAppRunner:
                                 replied_friends += 1
 
                         else:
-                            # Cliente real: leer último mensaje y notificar
-                            print(f"[{account_id}] 🔔 ¡Cliente real ('{chat_name}')! Guardando notificación...")
-                            last_msg_text = ""
-                            try:
-                                for sel in [
-                                    'span[data-testid="selectable-text"]',
-                                    'div.message-in span.copyable-text',
-                                    'div.message-in span.selectable-text',
-                                    'div.message-in div.copyable-text',
-                                ]:
-                                    elems = page.locator(sel).all()
-                                    if elems:
-                                        last_msg_text = elems[-1].inner_text().strip()
-                                        if last_msg_text:
-                                            break
-                            except Exception:
-                                pass
+                            # Cliente real: analizar mensajes y decidir acción
+                            print(f"[{account_id}] 🔔 ¡Cliente real ('{chat_name}')! Analizando historial...")
 
-                            db.add_client_notification(
-                                account_id, chat_name, chat_name,
-                                last_msg_text or "Nuevo mensaje no leído de cliente."
-                            )
-                            notified_clients += 1
+                            # ── Paso A: Contar mensajes de salida previos ─────────────────
+                            # Determina si ya habíamos interactuado antes con este cliente
+                            num_salidas = self._contar_mensajes_salida(page, account_id)
 
-                            if auto_reply_enabled and auto_reply_message and auto_reply_message.strip():
-                                print(f"[{account_id}] 🤖 Autorespuesta activa para cliente ('{chat_name}'). Enviando...")
+                            # ── Paso B: Leer mensajes entrantes reales del cliente ────────
+                            client_messages = self._leer_mensajes_reales_cliente(page, account_id)
+
+                            # ── Paso C: Decidir acción según reglas exactas ────────────────
+                            #
+                            #  Filtro Auto-Respuesta Cliente:
+                            #    Si es 1 SOLO mensaje entrante (num_entradas == 1) y tiene MÁS DE 65 caracteres,
+                            #    se considera auto-respuesta del bot del cliente → NO NOTIFICAR, NO RESPONDER.
+                            #
+                            #  Regla 1: Cliente inició chat (0 salidas) y envió 1 solo mensaje
+                            #           → NO NOTIFICAR, NO AUTO-RESPONDER.
+                            #
+                            #  Regla 2: Cliente inició chat (0 salidas) y envió 2 o más mensajes
+                            #           → NOTIFICAR Y AUTO-RESPONDER (si está activado).
+                            #
+                            #  Regla 3: Antes hay 1 mensaje mío (campaña) y hay mensajes nuevos del cliente
+                            #           → NOTIFICAR Y AUTO-RESPONDER (si está activado).
+                            #
+                            #  Regla 4: Antes hay 2 o más mensajes míos y hay mensajes nuevos del cliente
+                            #           → NOTIFICAR Y NO AUTO-RESPONDER (solo notifica).
+                            # ─────────────────────────────────────────────────────────────
+                            num_entradas = len(client_messages)
+                            auto_reply_valido = auto_reply_enabled and bool(auto_reply_message and auto_reply_message.strip())
+
+                            # Extraer texto limpio del primer mensaje para verificar longitud real
+                            primer_texto = ""
+                            if num_entradas > 0:
+                                raw_msg = client_messages[0]
+                                primer_texto = raw_msg.split("]", 1)[1].strip() if (raw_msg.startswith("[") and "]" in raw_msg) else raw_msg.strip()
+
+                            # Verificar si es una auto-respuesta del cliente (1 solo mensaje > 65 caracteres)
+                            es_autorespuesta_cliente = (num_entradas == 1 and len(primer_texto) > 65)
+
+                            debe_notificar = False
+                            debe_auto_reply = False
+
+                            if num_entradas == 0:
+                                print(f"[{account_id}] 🔕 '{chat_name}' — sin mensajes reales de cliente → sin acción")
+
+                            elif es_autorespuesta_cliente:
+                                # Filtro Auto-Respuesta Cliente: 1 solo mensaje con >65 caracteres
+                                print(f"[{account_id}] 🤖 [Auto-Respuesta Cliente] 1 solo mensaje de {len(primer_texto)} chars (> 65) → OMITIENDO (NO NOTIFICAR, NO RESPONDER)")
+                                debe_notificar = False
+                                debe_auto_reply = False
+
+                            elif num_salidas == 0:
+                                if num_entradas == 1:
+                                    # Regla 1: 0 salidas, 1 entrada corto -> no notifica, no autorresponde
+                                    print(f"[{account_id}] 📋 [Regla 1] Chat iniciado por cliente (0 salidas, 1 entrada corto) → NO NOTIFICAR, NO AUTO-RESPONDER")
+                                    debe_notificar = False
+                                    debe_auto_reply = False
+                                else:
+                                    # Regla 2: 0 salidas, 2+ entradas -> notifica y autorresponde
+                                    print(f"[{account_id}] 📋 [Regla 2] Chat iniciado por cliente (0 salidas, {num_entradas} entradas) → NOTIFICAR Y AUTO-RESPONDER")
+                                    debe_notificar = True
+                                    debe_auto_reply = auto_reply_valido
+
+                            elif num_salidas == 1:
+                                # Regla 3: 1 salida previa (campaña), cliente respondió -> notifica y autorresponde
+                                print(f"[{account_id}] 🔁 [Regla 3] 1 mensaje de salida previo (campaña) → NOTIFICAR Y AUTO-RESPONDER")
+                                debe_notificar = True
+                                debe_auto_reply = auto_reply_valido
+
+                            else:  # num_salidas >= 2
+                                # Regla 4: 2+ salidas previas -> notifica y no autorresponde (solo notifica)
+                                print(f"[{account_id}] 💬 [Regla 4] {num_salidas} mensajes de salida previos → SOLO NOTIFICAR (sin auto-respuesta)")
+                                debe_notificar = True
+                                debe_auto_reply = False
+
+                            # ── Paso D: Ejecutar NOTIFICACIÓN ────────────────────────────
+                            if debe_notificar:
+                                last_msg_text = "\n".join(client_messages)
+                                db.add_client_notification(
+                                    account_id, chat_name, chat_name,
+                                    last_msg_text
+                                )
+                                notified_clients += 1
+                                print(f"[{account_id}] ✅ Notificación guardada en BD para '{chat_name}': {last_msg_text[:80]}...")
+                            else:
+                                print(f"[{account_id}] 🔕 '{chat_name}' — sin mensajes reales de cliente → omitiendo notificación")
+
+                            # ── Paso E: Ejecutar AUTO-RESPUESTA ──────────────────────────
+                            if debe_auto_reply:
+                                print(f"[{account_id}] 🤖 Enviando auto-respuesta a '{chat_name}'...")
                                 compose = self._find_compose_input(page)
                                 if compose:
                                     compose.click()
@@ -893,6 +958,7 @@ class WhatsAppRunner:
                                     if not sent:
                                         compose.press("Enter")
                                     time.sleep(1)
+
 
                         # Cerrar chat con Escape inmediatamente tras procesar
                         try:
@@ -954,6 +1020,163 @@ class WhatsAppRunner:
             except Exception:
                 pass
         return None
+
+    def _leer_mensajes_reales_cliente(self, page: Page, account_id: str) -> list:
+        """
+        Lee los mensajes REALES del cliente en el chat abierto, filtrando ruido.
+
+        Algoritmo (inspirado en MKT/whatsapp_monitor_service.py):
+          1. Recorre las filas del DOM de abajo hacia arriba para hallar el
+             ÚLTIMO mensaje de salida (tail-out / aria-label="Tú:").
+          2. Extrae la hora de ese mensaje desde data-pre-plain-text o span[dir='auto'].
+          3. Luego recorre DE NUEVO de abajo hacia arriba capturando mensajes
+             ENTRANTES que están POR DEBAJO de ese mensaje de salida.
+          4. FILTROS para descartar ruido:
+             - Auto-respuesta WhatsApp: hora_entrada == hora_salida AND len(texto) <= 70
+             - Plantilla empresa larga: len(texto) >= 200
+          5. Si no se encontró ningún mensaje de salida, retorna hasta los últimos 5
+             mensajes entrantes disponibles (caso: chat completamente nuevo).
+
+        Returns:
+            Lista de strings con los mensajes reales del cliente, en orden cronológico.
+        """
+        try:
+            print(f"[{account_id}] Leyendo mensajes reales del cliente en chat abierto...")
+
+            # Esperar que los mensajes carguen
+            time.sleep(0.5)
+
+            # Extraer filas del DOM via JavaScript para máxima velocidad y compatibilidad
+            filas_data = page.evaluate("""() => {
+                const filas = Array.from(document.querySelectorAll('div[role="row"]'));
+                return filas.map(fila => {
+                    // Determinar si es salida (tail-out o aria-label "Tú:")
+                    const hasTailOut = !!fila.querySelector('[data-testid="tail-out"]');
+                    const hasAriaYo  = !!fila.querySelector('span[aria-label="Tú:"]');
+                    const hasOut     = !!fila.querySelector('div.message-out');
+                    const esSalida   = hasTailOut || hasAriaYo || hasOut;
+
+                    // Determinar si es entrada (tail-in)
+                    const hasTailIn  = !!fila.querySelector('[data-testid="tail-in"]');
+                    const hasIn      = !!fila.querySelector('div.message-in');
+                    const esEntrada  = hasTailIn || hasIn;
+
+                    // Extraer hora desde data-pre-plain-text (formato "[HH:MM, DD/MM/YYYY] Nombre: ")
+                    let hora = '';
+                    const copyable = fila.querySelector('div.copyable-text[data-pre-plain-text]');
+                    if (copyable) {
+                        const pre = copyable.getAttribute('data-pre-plain-text') || '';
+                        const m = pre.match(/(\\d{1,2}:\\d{2})/);
+                        if (m) hora = m[1];
+                    }
+                    // Fallback: span con hora visible
+                    if (!hora) {
+                        const spanHora = fila.querySelector("span[dir='auto'].x1c4vz4f");
+                        if (spanHora) {
+                            const m2 = (spanHora.textContent || '').match(/(\\d{1,2}:\\d{2})/);
+                            if (m2) hora = m2[1];
+                        }
+                    }
+
+                    // Extraer texto
+                    let texto = '';
+                    const selTexto = [
+                        'span[data-testid="selectable-text"]',
+                        'span.copyable-text',
+                        'div.copyable-text'
+                    ];
+                    for (const sel of selTexto) {
+                        const el = fila.querySelector(sel);
+                        if (el && el.textContent.trim()) {
+                            texto = el.textContent.trim();
+                            break;
+                        }
+                    }
+
+                    return { esSalida, esEntrada, hora, texto };
+                });
+            }""")
+
+            if not filas_data:
+                print(f"[{account_id}] No se encontraron filas en el chat.")
+                return []
+
+            MAX_SIN_SALIDA = 5
+            hora_ultimo_salida = ""
+            idx_ultimo_salida = -1
+
+            # Paso 1: Encontrar el índice y hora del ÚLTIMO mensaje de salida
+            for i in range(len(filas_data) - 1, -1, -1):
+                fila = filas_data[i]
+                if fila.get("esSalida"):
+                    hora_ultimo_salida = fila.get("hora", "")
+                    idx_ultimo_salida = i
+                    print(f"[{account_id}] 🕐 Último mensaje enviado en fila {i}, hora='{hora_ultimo_salida}'")
+                    break
+
+            # Paso 2: Capturar mensajes entrantes POSTERIORES al de salida
+            mensajes_nuevos = []
+            for i in range(len(filas_data) - 1, -1, -1):
+                # Detener al llegar al mensaje de salida (o antes si no hay ninguno)
+                if i == idx_ultimo_salida:
+                    print(f"[{account_id}] ⛔ Llegado al último mensaje de salida. Deteniendo.")
+                    break
+
+                # Si no hay mensaje de salida, limitar a 5 últimos
+                if idx_ultimo_salida == -1 and len(mensajes_nuevos) >= MAX_SIN_SALIDA:
+                    print(f"[{account_id}] Límite de {MAX_SIN_SALIDA} mensajes sin salida alcanzado.")
+                    break
+
+                fila = filas_data[i]
+                if not fila.get("esEntrada"):
+                    continue
+
+                texto = fila.get("texto", "").strip()
+                hora_entrada = fila.get("hora", "")
+
+                if not texto:
+                    continue
+
+                etiqueta = texto
+                mensajes_nuevos.append(etiqueta)
+
+            # Invertir para orden cronológico (más antiguo primero)
+            mensajes_nuevos.reverse()
+
+            print(f"[{account_id}] 📩 {len(mensajes_nuevos)} mensaje(s) real(es) del cliente encontrado(s).")
+            return mensajes_nuevos
+
+        except Exception as e:
+            print(f"[{account_id}] Error en _leer_mensajes_reales_cliente: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def _contar_mensajes_salida(self, page: Page, account_id: str) -> int:
+        """
+        Cuenta cuántos mensajes de salida (enviados por nuestra cuenta) existen en el chat abierto.
+        Útil para saber si es un chat totalmente nuevo (0 salidas), una conversación iniciada
+        por nosotros (1 salida), o una conversación establecida (2+ salidas).
+        """
+        try:
+            count = page.evaluate("""() => {
+                const filas = Array.from(document.querySelectorAll('div[role="row"]'));
+                let count = 0;
+                for (const fila of filas) {
+                    const hasTailOut = !!fila.querySelector('[data-testid="tail-out"]');
+                    const hasAriaYo  = !!fila.querySelector('span[aria-label="Tú:"]');
+                    const hasOut     = !!fila.querySelector('div.message-out');
+                    if (hasTailOut || hasAriaYo || hasOut) {
+                        count++;
+                    }
+                }
+                return count;
+            }""")
+            print(f"[{account_id}] 📊 Mensajes de salida detectados en el chat: {count}")
+            return int(count or 0)
+        except Exception as e:
+            print(f"[{account_id}] Error contando mensajes de salida: {e}")
+            return 0
 
     def check_if_blocked_or_logged_out(self, page: Page, account_id: str) -> bool:
         """

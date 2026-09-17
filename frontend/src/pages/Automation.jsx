@@ -94,6 +94,27 @@ export default function Automation({ activeTab }) {
     }
   };
 
+  const resolveAllNotifications = async () => {
+    try {
+      const res = await fetch('/api/notifications/resolve_all', { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        addToast(data.message, 'success');
+        fetchAll();
+      }
+    } catch (err) {
+      addToast('Error al resolver notificaciones.', 'error');
+    }
+  };
+
+  const parseNotificationMessages = (text) => {
+    if (!text) return [];
+    return text
+      .split('\n')
+      .map((l) => l.replace(/^\[\d{1,2}:\d{2}.*?\]\s*/, '').trim())
+      .filter((l) => l.length > 0);
+  };
+
   useEffect(() => {
     if (activeTab === 'automation') {
       fetchAll();
@@ -522,6 +543,7 @@ export default function Automation({ activeTab }) {
                         : (n.account_phone || (n.account_id && n.account_id !== '?' ? n.account_id : 'Sin identificar'));
 
                       const shortTime = n.received_at ? n.received_at.slice(11, 16) : '';
+                      const parsedMsgs = parseNotificationMessages(n.message_text);
 
                       return (
                         <div 
@@ -539,7 +561,7 @@ export default function Automation({ activeTab }) {
                             </div>
 
                             <div className="client-notif-preview-msg">
-                              "{n.message_text}"
+                              {parsedMsgs.join(' • ') || n.message_text}
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -565,8 +587,20 @@ export default function Automation({ activeTab }) {
                                 </span>
                               </div>
 
-                              <div className="client-notif-bubble">
-                                💬 "{n.message_text}"
+                              <div className="client-notif-messages-container">
+                                {parsedMsgs.length > 0 ? (
+                                  parsedMsgs.map((msg, idx) => (
+                                    <div key={idx} className="client-notif-sub-bubble">
+                                      <span className="client-notif-msg-icon">💬</span>
+                                      <span className="client-notif-msg-text">{msg}</span>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="client-notif-sub-bubble">
+                                    <span className="client-notif-msg-icon">💬</span>
+                                    <span className="client-notif-msg-text">{n.message_text}</span>
+                                  </div>
+                                )}
                               </div>
 
                               <div className="client-notif-footer" style={{ justifyContent: 'flex-end' }}>
@@ -588,6 +622,17 @@ export default function Automation({ activeTab }) {
                   </div>
                 )}
               </div>
+
+              {notifications.length > 0 && (
+                <div className="client-notif-card-footer">
+                  <button
+                    className="client-notif-all-btn"
+                    onClick={resolveAllNotifications}
+                  >
+                    ✓ Marcar todo como atendido ({notifications.length})
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="card">

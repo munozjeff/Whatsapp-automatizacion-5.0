@@ -290,6 +290,11 @@ def resolve_notification(notif_id):
         return jsonify({"status": "success", "message": "Notificación marcada como atendida."})
     return jsonify({"status": "error", "message": "No se pudo actualizar la notificación."}), 400
 
+@app.route("/api/notifications/resolve_all", methods=["POST"])
+def resolve_all_notifications_endpoint():
+    count = db.resolve_all_client_notifications()
+    return jsonify({"status": "success", "message": f"{count} notificación(es) marcadas como atendidas.", "resolved_count": count})
+
 # --- GESTIÓN DE CUENTAS EXISTENTE ---
 
 @app.route("/api/accounts", methods=["GET"])
