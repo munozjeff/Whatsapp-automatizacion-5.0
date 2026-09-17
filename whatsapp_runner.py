@@ -1954,6 +1954,13 @@ class WhatsAppRunner:
             chat_opened = self._open_chat_for_name(page, account_id, target_name)
 
             if not chat_opened:
+                name_parts = (target_name or "").strip().split()
+                if len(name_parts) > 1:
+                    first_name = name_parts[0]
+                    print(f"[{account_id}] 🔄 [Historial] Contacto '{target_name}' no encontrado por nombre completo. Reintentando con el primer nombre: '{first_name}'...")
+                    chat_opened = self._open_chat_for_name(page, account_id, first_name)
+
+            if not chat_opened:
                 print(f"[{account_id}] 💬 Contacto '{target_name}' no fue encontrado en WhatsApp Web. Pasando al siguiente contacto...")
                 try:
                     page.keyboard.press("Escape")
