@@ -69,12 +69,12 @@ export default function UpdateManager() {
 
       {/* Modal de Actualización */}
       {showModal && (
-        <div className="modal-overlay" onClick={() => !updating && setShowModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+        <div className="modal-backdrop" onClick={() => !updating && setShowModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
             <div className="modal-header">
-              <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px' }}>
                 🚀 Actualización de Plataforma (1-Click)
-              </h3>
+              </h2>
               {!updating && (
                 <button className="modal-close" onClick={() => setShowModal(false)}>×</button>
               )}
@@ -155,6 +155,7 @@ export default function UpdateManager() {
           </div>
         </div>
       )}
+
     </>
   );
 }

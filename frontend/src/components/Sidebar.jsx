@@ -67,20 +67,22 @@ export default function Sidebar({ activeTab, setActiveTab }) {
         </div>
       </div>
 
-      <nav className="nav-menu">
-        {navItems.map((item) => (
-          <button
-            key={item.id}
-            className={`nav-btn ${activeTab === item.id ? 'active' : ''}`}
-            onClick={() => setActiveTab(item.id)}
-          >
-            {item.icon}
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </nav>
+      <div className="sidebar-scroll-area">
+        <nav className="nav-menu">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              className={`nav-btn ${activeTab === item.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(item.id)}
+            >
+              {item.icon}
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
 
-      <UpdateManager />
+        <UpdateManager />
+      </div>
 
       <div className="sidebar-footer">
         <div className="sys-status">
