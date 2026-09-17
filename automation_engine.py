@@ -544,16 +544,25 @@ class AutomationEngine:
             print(f"[AutomationEngine] Nota en escaneo historial '{acc_id}': {scan_err}")
 
         # 2. Enviar mensajes de calentamiento a cuentas amigas (buscando por NOMBRE y APELLIDO)
+        #    SOLO se seleccionan como destino las cuentas con status_state == 'disponible'.
+        #    Las cuentas bloqueadas, restringidas, enviando o haciendo historial se omiten.
         peer_accounts = []
-        for p_id, p_info in all_states.items():
+        fresh_states = db.get_all_account_states()  # Leer estado actualizado antes de construir la lista
+        for p_id, p_info in fresh_states.items():
             if p_id == acc_id:
                 continue
+
+            # Filtro clave: solo cuentas disponibles como destino de historial
+            p_status = p_info.get("status_state", "")
+            if p_status != "disponible":
+                print(f"[AutomationEngine] ⏭️ [Historial] Omitiendo cuenta amiga '{p_id}' como destino (estado: '{p_status}').")
+                continue
+
             fn = (p_info.get("first_name") or "").strip()
             ln = (p_info.get("last_name") or "").strip()
             phone = (p_info.get("phone") or "").strip()
 
             if not fn or not ln:
-                db.update_account_state(p_id, p_info.get("status_state", "disponible"))
                 refreshed = db.get_all_account_states().get(p_id, {})
                 fn = (refreshed.get("first_name") or "").strip()
                 ln = (refreshed.get("last_name") or "").strip()
