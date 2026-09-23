@@ -613,10 +613,13 @@ def update_job_status(job_id):
     
     if new_status == "running":
         db.update_automation_job_status(job_id, "running")
-        automation_engine.start_job(job_id)
+        ok, msg = automation_engine.start_job(job_id)
+        if not ok:
+            db.update_automation_job_status(job_id, "paused")
+            return jsonify({"status": "error", "message": msg}), 400
     elif new_status in ("paused", "completed", "error"):
         automation_engine.stop_job(job_id)
-        db.update_automation_job_status(job_id, new_status)
+        db.update_automation_job_status(job_id, "pausing" if new_status == "paused" else new_status)
         job = db.get_automation_job(job_id)
         if job:
             for acc_id in job.get("account_ids", []):

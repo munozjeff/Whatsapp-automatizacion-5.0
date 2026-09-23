@@ -4,7 +4,7 @@ import random
 import threading
 import database as db
 from whatsapp_runner import runner
-from anti_detection import human_delay
+from anti_detection import human_delay, interruptible_sleep
 
 class AutomationEngine:
     def __init__(self):
@@ -16,7 +16,13 @@ class AutomationEngine:
         """Inicia el hilo de ejecución principal para un job de automatización."""
         with self._lock:
             if job_id in self.active_jobs and self.active_jobs[job_id].is_alive():
-                return False, "El trabajo ya está ejecutándose."
+                # Esperar hasta 2.5s por si el hilo anterior aún está terminando de pausarse
+                wait_t = 0.0
+                while self.active_jobs[job_id].is_alive() and wait_t < 2.5:
+                    time.sleep(0.2)
+                    wait_t += 0.2
+                if self.active_jobs[job_id].is_alive():
+                    return False, "El trabajo aún se está deteniendo. Intente de nuevo en un segundo."
             self.job_stop_flags[job_id] = False
 
         thread = threading.Thread(
@@ -209,7 +215,7 @@ class AutomationEngine:
                     break
 
                 curr_job = db.get_automation_job(job_id)
-                if not curr_job or curr_job.get("status") in ("paused", "completed", "error"):
+                if not curr_job or curr_job.get("status") in ("paused", "pausing", "completed", "error"):
                     break
 
                 # Filtrar piscina disponible
@@ -247,7 +253,7 @@ class AutomationEngine:
                         print(f"[AutomationEngine] ⏸ '{acc_id}' alcanzó límite de sesión ({msgs_session} msgs). Saltando.")
                         continue
 
-                    # Reposo mínimo por cuenta
+                    # Reposo mínimo por cuenta (interrumpible en tiempo real)
                     last_time = last_sent_timestamp.get(acc_id, 0)
                     if last_time > 0:
                         elapsed = time.time() - last_time
@@ -256,12 +262,7 @@ class AutomationEngine:
                             min_left = int(wait_remaining // 60)
                             sec_left = int(wait_remaining % 60)
                             print(f"[AutomationEngine] ⏳ Reposo '{acc_id}': faltan {min_left}m {sec_left}s...")
-                            sleep_end = time.time() + wait_remaining
-                            while time.time() < sleep_end:
-                                if self.job_stop_flags.get(job_id, False):
-                                    break
-                                time.sleep(2)
-                            if self.job_stop_flags.get(job_id, False):
+                            if not interruptible_sleep(wait_remaining, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
                                 break
 
                     # Verificar / Conectar cuenta
@@ -424,7 +425,8 @@ class AutomationEngine:
                         )
 
                         if b < burst_limit - 1 and contact_idx < total_contacts:
-                            human_delay(delay_min, delay_max)
+                            if not human_delay(delay_min, delay_max, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
+                                break
 
                     last_sent_timestamp[acc_id] = time.time()
 
@@ -443,7 +445,7 @@ class AutomationEngine:
                     except Exception as scan_post_err:
                         print(f"[AutomationEngine] Nota en escaneo post-ráfaga: {scan_post_err}")
                     db.update_account_state(acc_id, "disponible", notes="Disponible")
-                    time.sleep(2)
+                    interruptible_sleep(1.0, stop_checker=lambda: self.job_stop_flags.get(job_id, False))
 
             if contact_idx >= total_contacts:
                 final_status = "error" if sent_count == 0 and error_count > 0 else "completed"
@@ -454,6 +456,14 @@ class AutomationEngine:
                     errors=error_count,
                     progress=100,
                     notes=final_notes
+                )
+            elif self.job_stop_flags.get(job_id, False):
+                print(f"[AutomationEngine] ⏸ Registrando estado 'paused' en BD para Job #{job_id}.")
+                db.update_automation_job_status(
+                    job_id, "paused",
+                    sent=sent_count,
+                    errors=error_count,
+                    notes="Trabajo pausado por el usuario."
                 )
 
         except Exception as e:
@@ -609,7 +619,8 @@ class AutomationEngine:
                             break
                         continue
 
-                human_delay(10, 20)
+                if not human_delay(10, 20, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
+                    break
 
         db.update_account_state(acc_id, "disponible", notes="Disponible (Historial completado)")
         return True
@@ -626,7 +637,6 @@ class AutomationEngine:
         history_msgs_per_turn = profile.get("history_msgs_per_turn", 2)
         auto_reply_enabled = bool(profile.get("auto_reply_enabled", 0))
         auto_reply_message = profile.get("auto_reply_message", "")
-        # Las cuentas de historial NO tienen tiempo de reposo: siempre disponibles.
 
         print(f"[AutomationEngine] 💬 Iniciando Tanda de Hacer Historial para Job #{job_id} — "
               f"piscina: {len(account_ids)} cuenta(s), tanda: {acc_history_count} cuenta(s) simultáneas.")
@@ -651,7 +661,7 @@ class AutomationEngine:
         try:
             while not self.job_stop_flags.get(job_id, False):
                 curr_job = db.get_automation_job(job_id)
-                if not curr_job or curr_job.get("status") in ("paused", "completed", "error"):
+                if not curr_job or curr_job.get("status") in ("paused", "pausing", "completed", "error"):
                     break
 
                 # Filtrar cuentas disponibles (no bloqueadas, no ocupadas en envío real)
@@ -665,14 +675,13 @@ class AutomationEngine:
 
                 if not available_history:
                     print(f"[AutomationEngine] 💬 [Historial] Sin cuentas libres para historial. Esperando...")
-                    time.sleep(8)
+                    interruptible_sleep(5, stop_checker=lambda: self.job_stop_flags.get(job_id, False))
                     continue
 
                 # ── Seleccionar tanda de acc_history_count cuentas ──────────────
                 tanda_size = min(acc_history_count, len(available_history))
                 start_offset = (tanda_index * tanda_size) % len(available_history)
 
-                # Sin reposo: todas las cuentas disponibles se incluyen en la tanda
                 tanda_accounts = [
                     available_history[(start_offset + i) % len(available_history)]
                     for i in range(tanda_size)
@@ -706,11 +715,14 @@ class AutomationEngine:
                     threads.append(t)
                     t.start()
 
-                # Esperar a que todos los hilos de la tanda terminen
+                # Esperar a que todos los hilos de la tanda terminen (sin bloquear si se solicita pausa)
                 for t in threads:
-                    t.join()
+                    while t.is_alive():
+                        t.join(timeout=0.2)
+                        if self.job_stop_flags.get(job_id, False):
+                            break
 
-                # Cerrar navegadores de la tanda completada antes de pasar a la siguiente tanda
+                # Cerrar navegadores de la tanda completada
                 print(f"[AutomationEngine] 🧹 [Historial] Tanda #{tanda_index} completada. Cerrando navegadores: {tanda_accounts}")
                 for acc_id in tanda_accounts:
                     try:
@@ -721,8 +733,7 @@ class AutomationEngine:
                 if self.job_stop_flags.get(job_id, False):
                     break
 
-                # Pequeña pausa entre tandas
-                time.sleep(3)
+                interruptible_sleep(3, stop_checker=lambda: self.job_stop_flags.get(job_id, False))
 
         except Exception as e:
             print(f"[AutomationEngine] Error en worker de historial Job #{job_id}: {e}")

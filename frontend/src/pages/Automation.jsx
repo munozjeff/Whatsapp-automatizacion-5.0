@@ -4,6 +4,7 @@ import { useToast } from '../hooks/useToast';
 /* ── Status helpers ─────────────────────────── */
 const STATUS_META = {
   running:   { label: 'En ejecución', cls: 'badge-active',     icon: '🚀' },
+  pausing:   { label: 'Pausando...',  cls: 'badge-restricted',  icon: '⏳' },
   pending:   { label: 'Pendiente',    cls: 'badge-restricted',  icon: '⏳' },
   paused:    { label: 'Pausado',      cls: 'badge-restricted',  icon: '⏸️' },
   completed: { label: 'Completado',   cls: 'badge-available',   icon: '✅' },
@@ -286,6 +287,15 @@ export default function Automation({ activeTab }) {
 
   /* ── Job control ─────────────────────────── */
   const updateJobStatus = async (jobId, status) => {
+    // Actualización optimista del estado en UI para respuesta inmediata
+    setJobs((prevJobs) =>
+      prevJobs.map((j) =>
+        j.id === jobId
+          ? { ...j, status: status === 'paused' ? 'pausing' : status }
+          : j
+      )
+    );
+
     try {
       const res = await fetch(`/api/automation/jobs/${jobId}/status`, {
         method: 'POST',
@@ -295,10 +305,13 @@ export default function Automation({ activeTab }) {
       const data = await res.json();
       if (data.status === 'success') {
         addToast(data.message, 'success');
-        fetchAll();
+      } else {
+        addToast(data.message || 'Error actualizando el job.', 'error');
       }
+      fetchAll();
     } catch (err) {
       addToast('Error actualizando el job.', 'error');
+      fetchAll();
     }
   };
 
@@ -1035,14 +1048,21 @@ export default function Automation({ activeTab }) {
                               <div className="job-tbl-actions">
                                 {job.status === 'running' && (
                                   <button className="btn btn-sm btn-warning"
+                                    title="Pausar automatización"
                                     onClick={() => updateJobStatus(job.id, 'paused')}>
-                                    ⏸
+                                    ⏸ Pausar
+                                  </button>
+                                )}
+                                {job.status === 'pausing' && (
+                                  <button className="btn btn-sm btn-warning" disabled title="Deteniendo hilos...">
+                                    <span className="spinner spinner-sm"></span> Pausando...
                                   </button>
                                 )}
                                 {job.status === 'paused' && (
                                   <button className="btn btn-sm btn-success"
+                                    title="Reanudar automatización"
                                     onClick={() => updateJobStatus(job.id, 'running')}>
-                                    ▶
+                                    ▶ Reanudar
                                   </button>
                                 )}
                                 <button className="btn btn-sm btn-danger"

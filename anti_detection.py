@@ -49,9 +49,29 @@ def apply_stealth_to_context(context: BrowserContext):
 def get_random_user_agent() -> str:
     return random.choice(USER_AGENTS)
 
-def human_delay(min_sec: float = 0.5, max_sec: float = 2.0):
-    """Pausa aleatoria para simular comportamiento humano."""
-    time.sleep(random.uniform(min_sec, max_sec))
+def human_delay(min_sec: float = 0.5, max_sec: float = 2.0, stop_checker=None) -> bool:
+    """Pausa aleatoria para simular comportamiento humano, interrumpible en tiempo real si stop_checker() es True."""
+    target = random.uniform(min_sec, max_sec)
+    step = 0.2
+    elapsed = 0.0
+    while elapsed < target:
+        if stop_checker and stop_checker():
+            return False
+        sleep_time = min(step, target - elapsed)
+        time.sleep(sleep_time)
+        elapsed += sleep_time
+    return True
+
+def interruptible_sleep(seconds: float, stop_checker=None, step: float = 0.2) -> bool:
+    """Espera interrumpible en intervalos cortos para permitir respuesta en tiempo real a señales de pausa/stop."""
+    elapsed = 0.0
+    while elapsed < seconds:
+        if stop_checker and stop_checker():
+            return False
+        sleep_time = min(step, seconds - elapsed)
+        time.sleep(sleep_time)
+        elapsed += sleep_time
+    return True
 
 def human_type(page: Page, selector: str, text: str):
     """Tipea texto caracter por caracter con variaciones de velocidad humanas."""
