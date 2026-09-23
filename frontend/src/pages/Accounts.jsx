@@ -81,8 +81,9 @@ export default function Accounts() {
   // ── Delete account modal ───────────────────────────────────────────
   const [deletingAccId, setDeletingAccId] = useState(null);
 
-  // ── View mode ──────────────────────────────────────────────────────
+  // ── View mode & search ─────────────────────────────────────────────
   const [viewMode, setViewMode] = useState('devices');
+  const [searchPhone, setSearchPhone] = useState('');
 
   const { addToast } = useToast();
   const pollTimerRef = useRef(null);
@@ -110,13 +111,21 @@ export default function Accounts() {
     };
   }, []);
 
-  // ── Helpers to get accounts per device ───────────────────────────
+  // ── Helpers & search filter for accounts ───────────────────────────
+  const filteredAccounts = accounts.filter((acc) => {
+    if (!searchPhone.trim()) return true;
+    const query = searchPhone.trim().toLowerCase();
+    const phone = (acc.phone || '').toLowerCase();
+    const accId = (acc.account_id || '').toLowerCase();
+    return phone.includes(query) || accId.includes(query);
+  });
+
   const getAccountsForDevice = (deviceId) => {
-    return accounts.filter((acc) => accountDeviceMap[acc.account_id] === deviceId);
+    return filteredAccounts.filter((acc) => accountDeviceMap[acc.account_id] === deviceId);
   };
 
   const getUnassignedAccounts = () => {
-    return accounts.filter((acc) => !accountDeviceMap[acc.account_id]);
+    return filteredAccounts.filter((acc) => !accountDeviceMap[acc.account_id]);
   };
 
   // ── QR polling ────────────────────────────────────────────────────
@@ -480,9 +489,9 @@ export default function Accounts() {
         </div>
       </div>
 
-      {/* Selector de Vista + contador */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <div style={{ display: 'flex', gap: '8px' }}>
+      {/* Selector de Vista + Buscador por teléfono + contador */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button
             className={`btn btn-sm ${viewMode === 'devices' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setViewMode('devices')}
@@ -498,9 +507,59 @@ export default function Accounts() {
             📑 Vista Lista
           </button>
         </div>
-        <div style={{ fontSize: '13px', color: 'var(--muted)', display: 'flex', gap: '16px' }}>
+
+        {/* Buscador de cuentas por celular o ID */}
+        <div style={{ position: 'relative', minWidth: '240px', flex: 1, maxWidth: '380px' }}>
+          <input
+            type="text"
+            className="form-control"
+            placeholder="🔍 Buscar cuenta por número cel o ID..."
+            value={searchPhone}
+            onChange={(e) => setSearchPhone(e.target.value)}
+            style={{
+              paddingLeft: '34px',
+              paddingRight: searchPhone ? '32px' : '12px',
+              borderRadius: '20px',
+              height: '36px',
+              fontSize: '0.85rem',
+              background: 'rgba(15, 23, 42, 0.7)',
+              borderColor: searchPhone ? 'var(--cyan)' : 'rgba(255, 255, 255, 0.15)',
+              boxShadow: searchPhone ? '0 0 8px rgba(0, 229, 255, 0.25)' : 'none'
+            }}
+          />
+          <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', opacity: 0.6, fontSize: '0.85rem' }}>
+            📱
+          </span>
+          {searchPhone && (
+            <button
+              type="button"
+              onClick={() => setSearchPhone('')}
+              style={{
+                position: 'absolute',
+                right: '10px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--muted)',
+                cursor: 'pointer',
+                fontSize: '14px',
+                lineHeight: 1
+              }}
+              title="Limpiar búsqueda"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        <div style={{ fontSize: '13px', color: 'var(--muted)', display: 'flex', gap: '16px', alignItems: 'center' }}>
           <span>Dispositivos: <strong style={{ color: 'var(--cyan)' }}>{devices.length}</strong></span>
-          <span>Cuentas totales: <strong style={{ color: 'var(--cyan)' }}>{accounts.length}</strong></span>
+          <span>
+            Cuentas: <strong style={{ color: 'var(--cyan)' }}>
+              {searchPhone.trim() ? `${filteredAccounts.length}/${accounts.length}` : accounts.length}
+            </strong>
+          </span>
         </div>
       </div>
 
@@ -525,6 +584,17 @@ export default function Accounts() {
                   onClick={() => { setNewDeviceName(''); setShowAddDeviceModal(true); }}
                 >
                   ➕ Crear Primer Dispositivo
+                </button>
+              </div>
+            </div>
+          ) : searchPhone.trim() && filteredAccounts.length === 0 ? (
+            <div className="card empty-card" style={{ marginTop: '16px' }}>
+              <div className="empty-state">
+                <div className="empty-icon">🔍</div>
+                <h3>Sin coincidencias</h3>
+                <p>No se encontraron cuentas asociadas al número de celular o búsqueda "<strong>{searchPhone}</strong>".</p>
+                <button className="btn btn-secondary btn-sm" onClick={() => setSearchPhone('')}>
+                  Limpiar Búsqueda
                 </button>
               </div>
             </div>
@@ -577,8 +647,8 @@ export default function Accounts() {
                       {/* Cuentas existentes */}
                       {devAccounts.map((acc) => renderMiniCard(acc))}
 
-                      {/* Slots vacíos */}
-                      {Array.from({ length: emptySlots }).map((_, slotIdx) => (
+                      {/* Slots vacíos (solo cuando no hay búsqueda activa) */}
+                      {!searchPhone.trim() && Array.from({ length: emptySlots }).map((_, slotIdx) => (
                         <div
                           key={`slot-${slotIdx}`}
                           className="empty-slot-card"
@@ -627,8 +697,19 @@ export default function Accounts() {
                 <p>No hay cuentas registradas. Crea un Dispositivo y agrega cuentas desde sus slots.</p>
               </div>
             </div>
+          ) : filteredAccounts.length === 0 ? (
+            <div className="card empty-card" style={{ gridColumn: '1 / -1' }}>
+              <div className="empty-state">
+                <div className="empty-icon">🔍</div>
+                <h3>Sin coincidencias</h3>
+                <p>No se encontraron cuentas con el número o búsqueda "<strong>{searchPhone}</strong>".</p>
+                <button className="btn btn-secondary btn-sm" onClick={() => setSearchPhone('')}>
+                  Limpiar Búsqueda
+                </button>
+              </div>
+            </div>
           ) : (
-            accounts.map((acc) => {
+            filteredAccounts.map((acc) => {
               const isInstActive = acc.is_active;
               let badgeClass = 'badge-available';
               let badgeText = acc.status_state || 'Disponible';

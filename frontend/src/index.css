@@ -2102,7 +2102,7 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  user-select: none;
+  user-select: text;
 }
 
 .client-notif-sender {

@@ -43,6 +43,11 @@ export default function Automation({ activeTab }) {
 
   const toggleExpandNotif = (id, e) => {
     if (e) e.stopPropagation();
+    // Si el usuario está seleccionando texto, no alternar expansión
+    const selection = window.getSelection();
+    if (selection && selection.toString().trim().length > 0) {
+      return;
+    }
     setExpandedNotifs((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -55,6 +60,18 @@ export default function Automation({ activeTab }) {
   };
 
   /* ── Fetch ───────────────────────────────── */
+  const fetchNotificationsOnly = async () => {
+    try {
+      const res = await fetch('/api/notifications?status=pending');
+      const data = await res.json();
+      if (data?.status === 'success') {
+        setNotifications(data.notifications || []);
+      }
+    } catch (err) {
+      console.error('Error cargando notificaciones:', err);
+    }
+  };
+
   const fetchAll = async () => {
     try {
       const [pRes, aRes, jRes, nRes] = await Promise.allSettled([
@@ -82,28 +99,35 @@ export default function Automation({ activeTab }) {
   };
 
   const resolveNotification = async (id) => {
+    // Respuesta instantánea en UI (Actualización optimista)
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    addToast('Notificación atendida.', 'success');
     try {
       const res = await fetch(`/api/notifications/${id}/resolve`, { method: 'POST' });
       const data = await res.json();
-      if (data.status === 'success') {
-        addToast('Notificación atendida.', 'success');
-        fetchAll();
+      if (data.status !== 'success') {
+        fetchNotificationsOnly();
       }
     } catch (err) {
-      addToast('Error al resolver notificación.', 'error');
+      addToast('Error al resolver notificación en servidor.', 'error');
+      fetchNotificationsOnly();
     }
   };
 
   const resolveAllNotifications = async () => {
+    const count = notifications.length;
+    // Respuesta instantánea en UI (Actualización optimista)
+    setNotifications([]);
+    addToast(`${count} notificación(es) marcadas como atendidas.`, 'success');
     try {
       const res = await fetch('/api/notifications/resolve_all', { method: 'POST' });
       const data = await res.json();
-      if (data.status === 'success') {
-        addToast(data.message, 'success');
-        fetchAll();
+      if (data.status !== 'success') {
+        fetchNotificationsOnly();
       }
     } catch (err) {
-      addToast('Error al resolver notificaciones.', 'error');
+      addToast('Error al resolver notificaciones en servidor.', 'error');
+      fetchNotificationsOnly();
     }
   };
 
