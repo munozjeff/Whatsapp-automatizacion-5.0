@@ -475,6 +475,29 @@ def add_client_notification(account_id: str, client_phone: str, client_name: str
 
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # ── Deduplicación crítica: si ya existe una notificación PENDING para este
+    #    account_id + client_phone, NO crear una nueva; actualizar el texto del
+    #    mensaje y renovar el timestamp para que el operador no pierda el aviso.
+    cursor.execute("""
+        SELECT id FROM client_notifications
+        WHERE account_id = ? AND client_phone = ? AND status = 'pending'
+        LIMIT 1
+    """, (account_id, client_phone))
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute("""
+            UPDATE client_notifications
+            SET message_text = ?, received_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (message_text, existing["id"]))
+        conn.commit()
+        notif_id = existing["id"]
+        print(f"[DB Notification] ♻️ Notificación pendiente actualizada para '{client_phone}' en '{account_id}' (id={notif_id}).")
+        conn.close()
+        return notif_id
+
     cursor.execute("""
         INSERT INTO client_notifications (account_id, client_phone, client_name, message_text, status)
         VALUES (?, ?, ?, ?, 'pending')

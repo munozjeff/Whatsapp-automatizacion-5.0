@@ -37,6 +37,10 @@ export default function Automation({ activeTab }) {
 
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
+  // IDs de notificaciones que el usuario ya marcó como atendidas y cuya
+  // request al servidor aún puede estar en vuelo. El polling NO debe
+  // restaurar estas notificaciones mientras estén en este conjunto.
+  const pendingResolveIds = useRef(new Set());
 
   const [notifications, setNotifications] = useState([]);
   const [expandedNotifs, setExpandedNotifs] = useState(new Set());
@@ -65,7 +69,12 @@ export default function Automation({ activeTab }) {
       const res = await fetch('/api/notifications?status=pending');
       const data = await res.json();
       if (data?.status === 'success') {
-        setNotifications(data.notifications || []);
+        // Filtrar notificaciones que el usuario ya marcó pero cuya request
+        // aún puede estar en vuelo (evita que vuelvan a aparecer).
+        const filtered = (data.notifications || []).filter(
+          (n) => !pendingResolveIds.current.has(n.id)
+        );
+        setNotifications(filtered);
       }
     } catch (err) {
       console.error('Error cargando notificaciones:', err);
@@ -91,7 +100,12 @@ export default function Automation({ activeTab }) {
         setJobs(jRes.value.jobs || []);
       }
       if (nRes.status === 'fulfilled' && nRes.value?.status === 'success') {
-        setNotifications(nRes.value.notifications || []);
+        // Filtrar notificaciones que el usuario ya marcó pero cuya request
+        // aún puede estar en vuelo (evita que vuelvan a aparecer).
+        const filtered = (nRes.value.notifications || []).filter(
+          (n) => !pendingResolveIds.current.has(n.id)
+        );
+        setNotifications(filtered);
       }
     } catch (err) {
       console.error('Error cargando datos de automatización:', err);
@@ -99,6 +113,9 @@ export default function Automation({ activeTab }) {
   };
 
   const resolveNotification = async (id) => {
+    // Registrar el ID como "en proceso de resolve" ANTES de cualquier fetch
+    // para que el polling no lo restaure si dispara durante la request.
+    pendingResolveIds.current.add(id);
     // Respuesta instantánea en UI (Actualización optimista)
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     addToast('Notificación atendida.', 'success');
@@ -106,9 +123,14 @@ export default function Automation({ activeTab }) {
       const res = await fetch(`/api/notifications/${id}/resolve`, { method: 'POST' });
       const data = await res.json();
       if (data.status !== 'success') {
+        // El servidor falló → quitar de pendingResolveIds para que vuelva
+        pendingResolveIds.current.delete(id);
         fetchNotificationsOnly();
       }
+      // Si fue exitoso, el ID permanece en pendingResolveIds para que el
+      // siguiente ciclo de polling no lo restaure. El GC del ref es natural.
     } catch (err) {
+      pendingResolveIds.current.delete(id);
       addToast('Error al resolver notificación en servidor.', 'error');
       fetchNotificationsOnly();
     }
@@ -116,6 +138,8 @@ export default function Automation({ activeTab }) {
 
   const resolveAllNotifications = async () => {
     const count = notifications.length;
+    // Registrar todos los IDs actuales como "en proceso" para bloquear polling
+    notifications.forEach((n) => pendingResolveIds.current.add(n.id));
     // Respuesta instantánea en UI (Actualización optimista)
     setNotifications([]);
     addToast(`${count} notificación(es) marcadas como atendidas.`, 'success');
@@ -123,9 +147,12 @@ export default function Automation({ activeTab }) {
       const res = await fetch('/api/notifications/resolve_all', { method: 'POST' });
       const data = await res.json();
       if (data.status !== 'success') {
+        // Revertir el bloqueo si el servidor falló
+        notifications.forEach((n) => pendingResolveIds.current.delete(n.id));
         fetchNotificationsOnly();
       }
     } catch (err) {
+      notifications.forEach((n) => pendingResolveIds.current.delete(n.id));
       addToast('Error al resolver notificaciones en servidor.', 'error');
       fetchNotificationsOnly();
     }
