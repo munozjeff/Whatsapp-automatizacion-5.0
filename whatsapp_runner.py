@@ -1007,7 +1007,11 @@ class WhatsAppRunner:
             'div[data-testid="conversation-compose-box-input"]',
             'footer div[contenteditable="true"]',
             'div[contenteditable="true"][data-tab="10"]',
+            'footer div[role="textbox"]',
+            'div[contenteditable="true"][role="textbox"]',
             'p.copyable-text.x15bjb6t',
+            'footer [contenteditable="true"]',
+            'div[contenteditable="true"]',
         ]
         for sel in selectors:
             try:
@@ -1301,28 +1305,43 @@ class WhatsAppRunner:
         """
         print(f"[{account_id}] 🔍 [Nuevo chat] Abriendo para +{clean_phone}...")
 
-        # Selectores CSS del boton Nuevo chat (sin XPath mezclado)
+        # Selectores CSS del boton Nuevo chat (multilingüe y multiversión)
         NEW_CHAT_CSS = [
-            '[title="Nuevo chat"]',
-            '[aria-label="Nuevo chat"]',
+            '[title*="Nuevo chat" i]',
+            '[title*="New chat" i]',
+            '[aria-label*="Nuevo chat" i]',
+            '[aria-label*="New chat" i]',
+            '[aria-label*="chat" i]',
             '[data-testid="new-chat-btn"]',
+            'span[data-icon="new-chat-outline"]',
+            'span[data-icon="chat"]',
+            'span[data-icon="plus"]',
+            'span[data-icon="note-add"]',
         ]
-        # Selectores XPath del boton Nuevo chat (separados)
+        # Selectores XPath del boton Nuevo chat
         NEW_CHAT_XPATH = [
-            '//span[@data-icon="new-chat-outline"]/ancestor::button[1]',
-            '//button[@aria-label="Nuevo chat"]',
-            '//div[@title="Nuevo chat"]',
+            '//span[@data-icon="new-chat-outline"]/ancestor::*[self::button or self::div[@role="button"]][1]',
+            '//span[@data-icon="chat"]/ancestor::*[self::button or self::div[@role="button"]][1]',
+            '//span[@data-icon="plus"]/ancestor::*[self::button or self::div[@role="button"]][1]',
+            '//button[contains(@aria-label,"chat") or contains(@aria-label,"Chat")]',
+            '//div[@role="button" and (contains(@aria-label,"chat") or contains(@aria-label,"Chat"))]',
         ]
 
         # Selectores del input de busqueda (modal nuevo chat)
         SEARCH_CSS = [
+            'div[contenteditable="true"][data-tab="3"]',
+            'div[contenteditable="true"][role="textbox"]',
             'input[data-tab="3"]',
-            'div[data-tab="3"][contenteditable="true"]',
+            'div[data-tab="3"]',
+            'p.selectable-text.copyable-text',
+            'div[contenteditable="true"]',
+            'input[type="text"]',
             'input.copyable-text',
         ]
         SEARCH_XPATH = [
-            '//p[contains(@class,"copyable-text") and contains(@class,"x15bjb6t")]',
-            '//input[@data-tab="3" and contains(@class,"html-input")]',
+            '//div[@contenteditable="true" and (@data-tab="3" or @role="textbox")]',
+            '//p[contains(@class,"copyable-text")]',
+            '//input[@data-tab="3"]',
             '//input[contains(@class,"copyable-text")]',
         ]
 
@@ -1547,47 +1566,58 @@ class WhatsAppRunner:
             chat_opened = self._open_chat_for_phone(page, account_id, clean_phone)
 
             if not chat_opened:
-                print(f"[{account_id}] Flujo nativo no abrio el chat → intentando via URL direct...")
+                print(f"[{account_id}] Flujo nativo no abrio el chat → intentando via navegacion URL direct...")
                 target_url = f"https://web.whatsapp.com/send?phone={clean_phone}"
-                page.goto(target_url, wait_until="domcontentloaded")
-                human_delay(2, 3)
-                if not page.is_closed():
-                    self.dismiss_whatsapp_modals(page)
-                    # ── Verificar bloqueo inmediatamente tras la navegacion URL ──
-                    if self.check_if_blocked_or_logged_out(page, account_id):
-                        return False, f"Cuenta '{account_id}' BLOQUEADA/Desconectada (QR detectado tras navegacion URL)."
-
-            # Verificar si el número no existe en WhatsApp
-            try:
-                invalid_elem = page.locator(
-                    "div:has-text('no está en WhatsApp'), "
-                    "div:has-text('invalid'), "
-                    "div:has-text('no es válido')"
-                ).first
-                if invalid_elem.is_visible(timeout=1500):
-                    print(f"[{account_id}] ❌ +{clean_phone} no está en WhatsApp.")
+                try:
+                    page.evaluate(f"window.location.href = '{target_url}'")
+                except Exception:
+                    page.goto(target_url, wait_until="domcontentloaded")
+                
+                # Espera activa de hasta 20s para dar tiempo a WhatsApp Web de resolver el SPA y abrir el compose box
+                deadline_url = time.time() + 20
+                while time.time() < deadline_url:
+                    if page.is_closed():
+                        break
+                    
                     try:
-                        page.keyboard.press("Escape")
+                        self.dismiss_whatsapp_modals(page)
                     except Exception:
                         pass
-                    return False, f"El número +{clean_phone} no está en WhatsApp."
-            except Exception:
-                pass
+
+                    if self.check_if_blocked_or_logged_out(page, account_id):
+                        return False, f"Cuenta '{account_id}' BLOQUEADA/Desconectada en WhatsApp (QR detectado tras navegacion URL)."
+
+                    # Verificar si el número no está en WhatsApp
+                    try:
+                        invalid_elem = page.locator(
+                            "div:has-text('no está en WhatsApp'), "
+                            "div:has-text('no es válido'), "
+                            "div:has-text('invalid'), "
+                            "div:has-text('is not on WhatsApp'), "
+                            "div:has-text('phone number is invalid')"
+                        ).first
+                        if invalid_elem.is_visible(timeout=500):
+                            print(f"[{account_id}] ❌ +{clean_phone} no está registrado en WhatsApp.")
+                            try:
+                                page.keyboard.press("Escape")
+                            except Exception:
+                                pass
+                            return False, f"El número +{clean_phone} no está en WhatsApp."
+                    except Exception:
+                        pass
+
+                    if self._find_compose_input(page):
+                        chat_opened = True
+                        break
+
+                    time.sleep(1.0)
 
             # Localizar el campo de texto con _find_compose_input
             chat_input = self._find_compose_input(page)
             if not chat_input:
-                # Intentar fallback con selector directo
-                chat_input = page.locator(
-                    'footer div[contenteditable="true"], '
-                    'div[contenteditable="true"][data-tab="10"]'
-                ).first
-                try:
-                    chat_input.wait_for(state="visible", timeout=8000)
-                except Exception:
-                    if not page.is_closed() and self.check_if_blocked_or_logged_out(page, account_id):
-                        return False, f"Cuenta '{account_id}' BLOQUEADA/Desconectada en WhatsApp."
-                    return False, f"No se pudo abrir el chat de +{clean_phone} (timeout de compose box)."
+                if not page.is_closed() and self.check_if_blocked_or_logged_out(page, account_id):
+                    return False, f"Cuenta '{account_id}' BLOQUEADA/Desconectada en WhatsApp."
+                return False, f"No se pudo abrir el chat de +{clean_phone} (timeout de compose box)."
 
             human_delay(1, 2)
 
