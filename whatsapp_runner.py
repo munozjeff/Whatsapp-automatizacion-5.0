@@ -856,10 +856,7 @@ class WhatsAppRunner:
                             # Determina si ya habíamos interactuado antes con este cliente
                             num_salidas = self._contar_mensajes_salida(page, account_id)
 
-                            # ── Paso B: Leer mensajes entrantes reales del cliente ────────
-                            client_messages = self._leer_mensajes_reales_cliente(page, account_id)
-
-                            # ── Paso C: Decidir acción según reglas exactas ────────────────
+                            #                            # ── Paso C: Decidir acción según reglas exactas ────────────────
                             #
                             #  Filtro Auto-Respuesta Cliente:
                             #    Si es 1 SOLO mensaje entrante (num_entradas == 1) y tiene MÁS DE 65 caracteres,
@@ -1137,7 +1134,7 @@ class WhatsAppRunner:
                 if not texto:
                     continue
 
-                etiqueta = texto
+                etiqueta = f"[{hora_entrada}] {texto}" if hora_entrada else texto
                 mensajes_nuevos.append(etiqueta)
 
             # Invertir para orden cronológico (más antiguo primero)
@@ -1952,13 +1949,6 @@ class WhatsAppRunner:
 
             # Intentar abrir chat buscando únicamente por NOMBRE COMPLETO (first_name + last_name)
             chat_opened = self._open_chat_for_name(page, account_id, target_name)
-
-            if not chat_opened:
-                name_parts = (target_name or "").strip().split()
-                if len(name_parts) > 1:
-                    first_name = name_parts[0]
-                    print(f"[{account_id}] 🔄 [Historial] Contacto '{target_name}' no encontrado por nombre completo. Reintentando con el primer nombre: '{first_name}'...")
-                    chat_opened = self._open_chat_for_name(page, account_id, first_name)
 
             if not chat_opened:
                 print(f"[{account_id}] 💬 Contacto '{target_name}' no fue encontrado en WhatsApp Web. Pasando al siguiente contacto...")

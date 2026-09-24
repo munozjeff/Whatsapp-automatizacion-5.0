@@ -203,6 +203,7 @@ class AutomationEngine:
 
         last_sent_timestamp: dict[str, float] = {}
         sent_in_session: dict[str, int] = {acc: 0 for acc in account_ids}
+        consecutive_fails_per_acc: dict[str, int] = {acc: 0 for acc in account_ids}
         blocked_accounts: set = set()
 
         contact_idx = sent_count
@@ -337,24 +338,27 @@ class AutomationEngine:
                         if success:
                             sent_count += 1
                             sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
+                            consecutive_fails_per_acc[acc_id] = 0  # Resetear contador al tener envío exitoso
+                            contact_idx += 1
                         else:
                             post_status = runner.active_instances.get(acc_id, {}).get("status", "")
                             db_st_post = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
 
                             if post_status == "BLOQUEADA" or db_st_post in ("bloqueado", "restringido"):
-                                print(f"[AutomationEngine] 🚫 BLOQUEO confirmado en envío de '{acc_id}'. Reemplazando...")
+                                print(f"[AutomationEngine] 🚫 BLOQUEO confirmado por WhatsApp en envío de '{acc_id}'. Reemplazando cuenta...")
                                 runner.close_instance(acc_id)
                                 blocked_accounts.add(acc_id)
                                 if db_st_post not in ("bloqueado", "restringido"):
                                     db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante envío real.", force=True)
                                 error_count += 1
                                 contact_idx += 1
+                                consecutive_fails_per_acc[acc_id] = 0
                                 break
                             else:
                                 recovered = False
                                 max_retries = 3
                                 for attempt in range(1, max_retries + 1):
-                                    print(f"[AutomationEngine] ⚠️ Fallo temporal en envío de '{acc_id}' ({msg_response}). Reintento ({attempt}/{max_retries}): cerrando y reabriendo...")
+                                    print(f"[AutomationEngine] ⚠️ Fallo temporal enviando a {phone} en '{acc_id}' ({msg_response}). Reintento ({attempt}/{max_retries}): cerrando y reabriendo...")
                                     runner.close_instance(acc_id)
                                     time.sleep(2)
                                     runner.open_session(acc_id)
@@ -391,6 +395,8 @@ class AutomationEngine:
                                     if success_retry:
                                         sent_count += 1
                                         sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
+                                        consecutive_fails_per_acc[acc_id] = 0
+                                        contact_idx += 1
                                         print(f"[AutomationEngine] ✅ Recuperación exitosa para '{acc_id}'. Mensaje enviado en reintento {attempt}/{max_retries}.")
                                         recovered = True
                                         break
@@ -405,17 +411,34 @@ class AutomationEngine:
                                             db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante reintento en envío real.", force=True)
                                         break
 
-                                if not recovered:
+                                if acc_id in blocked_accounts:
                                     error_count += 1
-                                    if acc_id not in blocked_accounts:
-                                        print(f"[AutomationEngine] 🚫 Fallo persistente tras {max_retries} reintentos en '{acc_id}'. Marcando como bloqueado.")
-                                        runner.close_instance(acc_id)
-                                        blocked_accounts.add(acc_id)
-                                        db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente tras {max_retries} reintentos en envío real.", force=True)
                                     contact_idx += 1
+                                    consecutive_fails_per_acc[acc_id] = 0
                                     break
 
-                        contact_idx += 1
+                                if not recovered:
+                                    error_count += 1
+                                    contact_idx += 1
+                                    consecutive_fails_per_acc[acc_id] = consecutive_fails_per_acc.get(acc_id, 0) + 1
+
+                                    # Regla de Reintento con el Número Siguiente:
+                                    # Si falla 1 solo número tras sus 3 reintentos, probar el número siguiente con esta misma cuenta.
+                                    # Solo si falla en 2 números CONSECUTIVOS se confirma fallo de la cuenta y se procede al bloqueo/reemplazo.
+                                    if consecutive_fails_per_acc[acc_id] < 2:
+                                        print(f"[AutomationEngine] ⚠️ Fallo enviando al número {phone} tras 3 reintentos en '{acc_id}'. "
+                                              f"No se bloquea la cuenta aún (1/2 fallos consecutivos). "
+                                              f"Probando con el número SIGUIENTE...")
+                                        continue
+                                    else:
+                                        print(f"[AutomationEngine] 🚫 Fallo consecutivo en 2 números distintos en '{acc_id}'. "
+                                              f"Confirmado fallo de la cuenta. Aplicando acción de bloqueo/reemplazo...")
+                                        runner.close_instance(acc_id)
+                                        blocked_accounts.add(acc_id)
+                                        db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente en {consecutive_fails_per_acc[acc_id]} números consecutivos.", force=True)
+                                        consecutive_fails_per_acc[acc_id] = 0
+                                        break
+
                         progress_pct = int((contact_idx / total_contacts) * 100)
                         db.update_automation_job_status(
                             job_id, "running",
@@ -444,6 +467,11 @@ class AutomationEngine:
                             print(f"[AutomationEngine] 🔔 [Post-ráfaga] {res_post['notified_clients']} cliente(s) notificados en '{acc_id}'")
                     except Exception as scan_post_err:
                         print(f"[AutomationEngine] Nota en escaneo post-ráfaga: {scan_post_err}")
+
+                    # 🧹 OPTIMIZACIÓN DE RECURSOS DE RAM Y CPU:
+                    # Cerrar inmediatamente el navegador de la cuenta tras terminar su ráfaga de envío
+                    print(f"[AutomationEngine] 🧹 Libera recursos: Cerrando navegador de '{acc_id}' tras completar ráfaga de envío.")
+                    runner.close_instance(acc_id)
                     db.update_account_state(acc_id, "disponible", notes="Disponible")
                     interruptible_sleep(1.0, stop_checker=lambda: self.job_stop_flags.get(job_id, False))
 
