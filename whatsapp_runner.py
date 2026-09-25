@@ -891,7 +891,58 @@ class WhatsAppRunner:
                             # Determina si ya habíamos interactuado antes con este cliente
                             num_salidas = self._contar_mensajes_salida(page, account_id)
 
-                            #                            # ── Paso C: Decidir acción según reglas exactas ────────────────
+                            # ── Paso B: Leer mensajes ENTRANTES del cliente ───────────────
+                            client_messages = []
+                            try:
+                                IN_SELECTORS = [
+                                    'div.message-in span.selectable-text[copyable-text]',
+                                    'div[data-id][class*="message-in"] span[copyable-text]',
+                                    'div[class*="_akbu"] span[copyable-text]',
+                                ]
+                                raw_nodes = []
+                                for sel in IN_SELECTORS:
+                                    try:
+                                        nodes = page.locator(sel).all()
+                                        if nodes:
+                                            raw_nodes = nodes
+                                            break
+                                    except Exception:
+                                        pass
+                                if not raw_nodes:
+                                    try:
+                                        for sp in page.locator('span[copyable-text]').all():
+                                            try:
+                                                pcls = sp.evaluate("el => el.closest('[class]')?.className || ''")
+                                                if 'message-in' in pcls:
+                                                    raw_nodes.append(sp)
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        pass
+                                for node in raw_nodes:
+                                    try:
+                                        txt = node.inner_text(timeout=500).strip()
+                                        if txt and len(txt) > 1:
+                                            ts = ""
+                                            try:
+                                                pre = node.evaluate(
+                                                    "el => el.closest('[data-pre-plain-text]')?.getAttribute('data-pre-plain-text') || ''"
+                                                )
+                                                if pre:
+                                                    ts = pre.split("]")[0].replace("[", "").strip()
+                                            except Exception:
+                                                pass
+                                            client_messages.append(f"[{ts}] {txt}" if ts else txt)
+                                    except Exception:
+                                        pass
+                                if client_messages:
+                                    print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}'.")
+                                else:
+                                    print(f"[{account_id}] ℹ️ Sin mensajes entrantes legibles de '{chat_name}'.")
+                            except Exception as read_err:
+                                print(f"[{account_id}] Nota leyendo msgs de '{chat_name}': {read_err}")
+
+                            # ── Paso C: Decidir acción según reglas exactas ────────────────
                             #
                             #  Filtro Auto-Respuesta Cliente:
                             #    Si es 1 SOLO mensaje entrante (num_entradas == 1) y tiene MÁS DE 65 caracteres,
@@ -1027,6 +1078,38 @@ class WhatsAppRunner:
 
         return {"replied_friends": replied_friends, "notified_clients": notified_clients}
 
+    def _contar_mensajes_salida(self, page: "Page", account_id: str) -> int:
+        """Cuenta los mensajes de SALIDA (burbuja derecha/out) en el chat actualmente abierto.
+        Retorna el número de mensajes enviados por nuestra cuenta en esta conversación.
+        """
+        count = 0
+        OUT_SELECTORS = [
+            'div.message-out span.selectable-text[copyable-text]',
+            'div[data-id][class*="message-out"] span[copyable-text]',
+        ]
+        try:
+            for sel in OUT_SELECTORS:
+                try:
+                    nodes = page.locator(sel).all()
+                    if nodes:
+                        count = len(nodes)
+                        break
+                except Exception:
+                    pass
+            if count == 0:
+                try:
+                    for sp in page.locator('span[copyable-text]').all():
+                        try:
+                            pcls = sp.evaluate("el => el.closest('[class]')?.className || ''")
+                            if 'message-out' in pcls:
+                                count += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[{account_id}] Nota contando salidas: {e}")
+        return count
 
     def _find_compose_input(self, page: Page):
         """
