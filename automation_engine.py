@@ -487,6 +487,8 @@ class AutomationEngine:
                 return
 
             # 2. Bucle de envío continuo mientras la cuenta se mantenga en sesión activa
+            #    La ráfaga (msgs_interval) determina cuántos mensajes se envían por ciclo
+            #    antes de hacer la pausa humana (delay_min/delay_max).
             sent_in_current_run = 0
             while not self.job_stop_flags.get(job_id, False):
                 # Verificar límite por sesión
@@ -496,57 +498,86 @@ class AutomationEngine:
                     sent_in_session[acc_id] = 0
                     break
 
-                # Tomar el próximo contacto de forma atómica
-                with sent_lock:
-                    if contact_idx_holder[0] >= total_contacts:
+                # ── INICIO DE RÁFAGA ────────────────────────────────────────────────
+                # Enviar exactamente msgs_interval mensajes (o menos si se acaban contactos/sesión)
+                sent_in_burst = 0
+                burst_had_block = False
+                for _ in range(msgs_interval):
+                    if self.job_stop_flags.get(job_id, False):
                         break
-                    contact_idx = contact_idx_holder[0]
-                    contact_idx_holder[0] += 1   # Reservar este índice
 
-                contact = contacts[contact_idx]
-                phone = contact.get("phone", "")
-                text = self._format_message(template_msg, contact, campaign_vars)
-                success, msg_response = runner.send_test_message(acc_id, phone, text)
+                    # Verificar límite de sesión dentro de la ráfaga
+                    if sent_in_session.get(acc_id, 0) >= msgs_session:
+                        break
 
-                if success:
+                    # Tomar el próximo contacto de forma atómica
                     with sent_lock:
-                        sent_count_holder[0] += 1
-                    sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
-                    consecutive_fails_per_acc[acc_id] = 0
-                    sent_in_current_run += 1
-                else:
-                    post_status = runner.active_instances.get(acc_id, {}).get("status", "")
-                    db_st_post = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+                        if contact_idx_holder[0] >= total_contacts:
+                            break
+                        contact_idx = contact_idx_holder[0]
+                        contact_idx_holder[0] += 1   # Reservar este índice
 
-                    if post_status == "BLOQUEADA" or db_st_post in ("bloqueado", "restringido"):
-                        print(f"[AutomationEngine] 🚫 BLOQUEO confirmado en '{acc_id}'. Reemplazando cuenta...")
-                        runner.close_instance(acc_id)
-                        blocked_accounts.add(acc_id)
-                        if db_st_post not in ("bloqueado", "restringido"):
-                            db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante envío real.", force=True)
+                    contact = contacts[contact_idx]
+                    phone = contact.get("phone", "")
+                    text = self._format_message(template_msg, contact, campaign_vars)
+                    success, msg_response = runner.send_test_message(acc_id, phone, text)
+
+                    if success:
                         with sent_lock:
-                            error_count_holder[0] += 1
+                            sent_count_holder[0] += 1
+                        sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
+                        sent_in_current_run += 1
+                        sent_in_burst += 1
                         consecutive_fails_per_acc[acc_id] = 0
-                        break
                     else:
-                        with sent_lock:
-                            error_count_holder[0] += 1
-                        consecutive_fails_per_acc[acc_id] = consecutive_fails_per_acc.get(acc_id, 0) + 1
+                        post_status = runner.active_instances.get(acc_id, {}).get("status", "")
+                        db_st_post = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
 
-                        if consecutive_fails_per_acc[acc_id] < 5:
-                            print(f"[AutomationEngine] ⚠️ Fallo al abrir chat con {phone} (Búsqueda + URL directa falló). "
-                                  f"[{consecutive_fails_per_acc[acc_id]}/5 fallos consecutivos]. Pasando al SIGUIENTE número...")
-                            continue
-                        else:
-                            print(f"[AutomationEngine] 🚫 Fallo consecutivo en 5 números distintos en '{acc_id}'. "
-                                  f"Aplicando acción de bloqueo/reemplazo...")
+                        if post_status == "BLOQUEADA" or db_st_post in ("bloqueado", "restringido"):
+                            print(f"[AutomationEngine] 🚫 BLOQUEO confirmado en '{acc_id}'. Reemplazando cuenta...")
                             runner.close_instance(acc_id)
                             blocked_accounts.add(acc_id)
-                            db.update_account_state(acc_id, "bloqueado", notes="Bloqueado por fallo persistente en 5 números consecutivos.", force=True)
+                            if db_st_post not in ("bloqueado", "restringido"):
+                                db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante envío real.", force=True)
+                            with sent_lock:
+                                error_count_holder[0] += 1
                             consecutive_fails_per_acc[acc_id] = 0
+                            burst_had_block = True
                             break
+                        else:
+                            with sent_lock:
+                                error_count_holder[0] += 1
+                            consecutive_fails_per_acc[acc_id] = consecutive_fails_per_acc.get(acc_id, 0) + 1
 
-                # Actualizar estado del trabajo en la BD
+                            if consecutive_fails_per_acc[acc_id] < 5:
+                                print(f"[AutomationEngine] ⚠️ Fallo al abrir chat con {phone} (Búsqueda + URL directa falló). "
+                                      f"[{consecutive_fails_per_acc[acc_id]}/5 fallos consecutivos]. Pasando al SIGUIENTE número...")
+                                # Continúa dentro de la ráfaga con el siguiente número
+                                continue
+                            else:
+                                print(f"[AutomationEngine] 🚫 Fallo consecutivo en 5 números distintos en '{acc_id}'. "
+                                      f"Aplicando acción de bloqueo/reemplazo...")
+                                runner.close_instance(acc_id)
+                                blocked_accounts.add(acc_id)
+                                db.update_account_state(acc_id, "bloqueado", notes="Bloqueado por fallo persistente en 5 números consecutivos.", force=True)
+                                consecutive_fails_per_acc[acc_id] = 0
+                                burst_had_block = True
+                                break
+
+                # ── FIN DE RÁFAGA ───────────────────────────────────────────────────
+                # Si hubo bloqueo dentro de la ráfaga, salir del bucle principal
+                if burst_had_block:
+                    break
+
+                # Si no se enviaron mensajes en la ráfaga (sin contactos), salir
+                if sent_in_burst == 0:
+                    with sent_lock:
+                        if contact_idx_holder[0] >= total_contacts:
+                            break
+                    # Sin contactos disponibles para esta ráfaga, terminar
+                    break
+
+                # Actualizar estado del trabajo en la BD tras cada ráfaga
                 with sent_lock:
                     c_sent = sent_count_holder[0]
                     c_err = error_count_holder[0]
@@ -558,23 +589,24 @@ class AutomationEngine:
                     errors=c_err,
                     progress=progress_pct
                 )
+                print(f"[AutomationEngine] 📨 Ráfaga completada en '{acc_id}': {sent_in_burst}/{msgs_interval} mensajes enviados "
+                      f"(sesión: {sent_in_session.get(acc_id,0)}/{msgs_session}).")
 
-                # Escanear chats no leídos periódicamente (cada msgs_interval envíos)
-                if sent_in_current_run % msgs_interval == 0:
-                    try:
-                        all_states_post = db.get_all_account_states()
-                        peer_phones_post = {info["phone"] for info in all_states_post.values() if info.get("phone")}
-                        res_post = runner.check_and_process_unread_chats(
-                            acc_id, peer_phones_post,
-                            auto_reply_enabled=auto_reply_enabled,
-                            auto_reply_message=auto_reply_message
-                        )
-                        if res_post.get("notified_clients", 0) > 0:
-                            print(f"[AutomationEngine] 🔔 [Post-envío] {res_post['notified_clients']} cliente(s) notificados en '{acc_id}'")
-                    except Exception as scan_post_err:
-                        print(f"[AutomationEngine] Nota en escaneo post-envío: {scan_post_err}")
+                # Escanear chats no leídos después de cada ráfaga
+                try:
+                    all_states_post = db.get_all_account_states()
+                    peer_phones_post = {info["phone"] for info in all_states_post.values() if info.get("phone")}
+                    res_post = runner.check_and_process_unread_chats(
+                        acc_id, peer_phones_post,
+                        auto_reply_enabled=auto_reply_enabled,
+                        auto_reply_message=auto_reply_message
+                    )
+                    if res_post.get("notified_clients", 0) > 0:
+                        print(f"[AutomationEngine] 🔔 [Post-ráfaga] {res_post['notified_clients']} cliente(s) notificados en '{acc_id}'")
+                except Exception as scan_post_err:
+                    print(f"[AutomationEngine] Nota en escaneo post-ráfaga: {scan_post_err}")
 
-                # Demora humana entre envíos
+                # Demora humana ENTRE RÁFAGAS (no entre mensajes individuales)
                 if not human_delay(delay_min, delay_max, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
                     break
 
