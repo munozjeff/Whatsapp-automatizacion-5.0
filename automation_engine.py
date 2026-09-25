@@ -260,8 +260,9 @@ class AutomationEngine:
     def _run_sending_worker(self, job_id: int, account_ids: list, profile: dict,
                             campaign_id: int, contacts: list, sent_count: int, error_count: int):
         """Worker encargado del envío masivo de la campaña a clientes (Envío Real).
-        Lanza acc_sending_count cuentas en PARALELO por tanda (igual que el worker de historial),
-        de modo que si hay 2 cuentas de envío se abren 2 navegadores simultáneos.
+        Mantiene en ejecución continua exactamente acc_sending_count navegadores abiertos.
+        Si una instancia se cierra, entra en reposo o falla, es reemplazada dinámicamente
+        por otra cuenta disponible del pool.
         """
         delay_min = profile.get("delay_min_sec", 15)
         delay_max = profile.get("delay_max_sec", 45)
@@ -288,7 +289,8 @@ class AutomationEngine:
         sent_count_holder = [sent_count]
         error_count_holder = [error_count]
         total_contacts = len(contacts)
-        tanda_index = 0
+
+        active_sending_threads: dict[str, threading.Thread] = {}
 
         try:
             while True:
@@ -305,10 +307,15 @@ class AutomationEngine:
                 if not curr_job or curr_job.get("status") in ("paused", "pausing", "completed", "error"):
                     break
 
-                # Filtrar piscina disponible
+                # 1. Limpiar hilos finalizados
+                dead_accs = [acc for acc, t in active_sending_threads.items() if not t.is_alive()]
+                for acc in dead_accs:
+                    del active_sending_threads[acc]
+
+                # 2. Filtrar piscina disponible
                 available_accounts = self._check_and_skip_blocked(account_ids, blocked_accounts, skip_sending=False)
-                if not available_accounts:
-                    print(f"[AutomationEngine] \ud83d\udeab Todas las cuentas del job #{job_id} están BLOQUEADAS/RESTRINGIDAS. Finalizando.")
+                if not available_accounts and not active_sending_threads:
+                    print(f"[AutomationEngine] 🚫 Todas las cuentas del job #{job_id} están BLOQUEADAS/RESTRINGIDAS. Finalizando.")
                     db.update_automation_job_status(
                         job_id, "error",
                         sent=sent_count_holder[0],
@@ -317,49 +324,53 @@ class AutomationEngine:
                     )
                     return
 
-                # ── Seleccionar tanda ────────────────────────────────────────────
-                tanda_size = min(acc_sending_count, len(available_accounts))
-                start_offset = (tanda_index * tanda_size) % len(available_accounts)
-                tanda_accounts = [
-                    available_accounts[(start_offset + i) % len(available_accounts)]
-                    for i in range(tanda_size)
-                ]
-                tanda_index += 1
+                # 3. Determinar número de instancias objetivas a mantener abiertas
+                target_count = min(acc_sending_count, len(available_accounts))
 
-                print(f"[AutomationEngine] \ud83d\udce4 Tanda #{tanda_index} Envío Real — "
-                      f"{len(tanda_accounts)} cuenta(s) en PARALELO: {tanda_accounts}")
-
-                # ── Lanzar la tanda en hilos paralelos ──────────────────────────
-                send_threads = []
-                for acc_id in tanda_accounts:
-                    t = threading.Thread(
-                        target=self._process_single_sending_account,
-                        args=(
-                            job_id, acc_id, profile,
-                            campaign_id, contacts, total_contacts,
-                            template_msg, campaign_vars,
-                            sent_in_session, consecutive_fails_per_acc,
-                            last_sent_timestamp, blocked_accounts,
-                            sent_count_holder, error_count_holder,
-                            contact_idx_holder, sent_lock,
-                            rest_time_seconds, delay_min, delay_max,
-                            msgs_session, msgs_interval,
-                            auto_reply_enabled, auto_reply_message
-                        ),
-                        daemon=True
-                    )
-                    send_threads.append(t)
-                    t.start()
-
-                # Esperar a que todos los hilos de la tanda terminen (sale si hay bandera de parada)
-                for t in send_threads:
-                    while t.is_alive():
-                        t.join(timeout=0.2)
-                        if self.job_stop_flags.get(job_id, False):
+                # 4. Lanzar nuevas instancias si hay cupos libres en el pool activo
+                if len(active_sending_threads) < target_count:
+                    for acc_id in available_accounts:
+                        if len(active_sending_threads) >= target_count:
                             break
+                        if acc_id in active_sending_threads:
+                            continue
 
-                if self.job_stop_flags.get(job_id, False):
-                    break
+                        # Verificar si la cuenta aún está en tiempo de reposo
+                        last_t = last_sent_timestamp.get(acc_id, 0)
+                        if last_t > 0:
+                            elapsed = time.time() - last_t
+                            if elapsed < rest_time_seconds:
+                                continue
+
+                        # Iniciar hilo de procesamiento persistente para esta cuenta
+                        t = threading.Thread(
+                            target=self._process_persistent_sending_account,
+                            args=(
+                                job_id, acc_id, profile,
+                                campaign_id, contacts, total_contacts,
+                                template_msg, campaign_vars,
+                                sent_in_session, consecutive_fails_per_acc,
+                                last_sent_timestamp, blocked_accounts,
+                                sent_count_holder, error_count_holder,
+                                contact_idx_holder, sent_lock,
+                                rest_time_seconds, delay_min, delay_max,
+                                msgs_session, msgs_interval,
+                                auto_reply_enabled, auto_reply_message
+                            ),
+                            daemon=True
+                        )
+                        active_sending_threads[acc_id] = t
+                        t.start()
+                        print(f"[AutomationEngine] 🚀 Instancia persistente iniciada para '{acc_id}'. Active sending instances: {len(active_sending_threads)}/{target_count}")
+
+                interruptible_sleep(1.0, stop_checker=lambda: self.job_stop_flags.get(job_id, False))
+
+            # Esperar a que terminen los hilos activos
+            for t in list(active_sending_threads.values()):
+                while t.is_alive():
+                    t.join(timeout=0.2)
+                    if self.job_stop_flags.get(job_id, False):
+                        break
 
             # ── Fin del bucle principal ──────────────────────────────────────────
             with sent_lock:
@@ -378,7 +389,7 @@ class AutomationEngine:
                     notes=final_notes
                 )
             elif self.job_stop_flags.get(job_id, False):
-                print(f"[AutomationEngine] \u23f8 Registrando estado 'paused' en BD para Job #{job_id}.")
+                print(f"[AutomationEngine] ⏸ Registrando estado 'paused' en BD para Job #{job_id}.")
                 db.update_automation_job_status(
                     job_id, "paused",
                     sent=final_sent,
@@ -396,7 +407,7 @@ class AutomationEngine:
                 if st not in ("bloqueado", "restringido") and acc not in blocked_accounts:
                     db.update_account_state(acc, "disponible", notes="Disponible")
 
-    def _process_single_sending_account(
+    def _process_persistent_sending_account(
             self, job_id: int, acc_id: str, profile: dict,
             campaign_id: int, contacts: list, total_contacts: int,
             template_msg: str, campaign_vars: list,
@@ -408,260 +419,235 @@ class AutomationEngine:
             msgs_session: int, msgs_interval: int,
             auto_reply_enabled: bool, auto_reply_message: str):
         """
-        Procesa el envío de una cuenta individual en su propio hilo (dentro de una tanda).
-        Comparte contact_idx_holder con los otros hilos de la misma tanda para evitar duplicados.
-        La bandera job_stop_flags se revisa al inicio de cada iteración.
+        Procesa el envío continuo de una cuenta individual manteniendo su navegador ABIERTO
+        y PERSISTENTE durante toda su sesión activa. Si alcanza el límite de sesión o falla,
+        libera la instancia para que el administrador del pool lance un reemplazo de inmediato.
         """
-        # ── Verificar bandera al inicio ──────────────────────────────────────────
         if self.job_stop_flags.get(job_id, False):
             return
 
-        auto_reply_enabled = bool(profile.get("auto_reply_enabled", 0))
-        auto_reply_message = profile.get("auto_reply_message", "")
-
-        # Verificar reposo de cuenta
-        last_time = last_sent_timestamp.get(acc_id, 0)
-        if last_time > 0:
-            elapsed = time.time() - last_time
-            if elapsed < rest_time_seconds:
-                wait_remaining = rest_time_seconds - elapsed
-                min_left = int(wait_remaining // 60)
-                sec_left = int(wait_remaining % 60)
-                print(f"[AutomationEngine] \u23f3 Reposo '{acc_id}': faltan {min_left}m {sec_left}s...")
-                if not interruptible_sleep(wait_remaining, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
-                    return
-
-        if self.job_stop_flags.get(job_id, False):
-            return
-
-        # Verificar / Conectar cuenta
-        current_status = runner.active_instances.get(acc_id, {}).get("status", "")
-        db_st_check = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-
-        if db_st_check in ("bloqueado", "restringido") or current_status == "BLOQUEADA":
-            print(f"[AutomationEngine] \ud83d\udeab '{acc_id}' BLOQUEADA/RESTRINGIDA. Saltando...")
-            runner.close_instance(acc_id)
-            blocked_accounts.add(acc_id)
-            return
-
-        db.update_account_state(acc_id, "enviando", notes=f"Envío Real Job #{job_id}")
-
-        if acc_id not in runner.active_instances or current_status != "CONECTADA":
-            print(f"[AutomationEngine] \ud83d\udd04 Abriendo navegador para cuenta '{acc_id}'...")
-            runner.open_session(acc_id)
-            wait_conn = 0
-            while wait_conn < 45:
-                if self.job_stop_flags.get(job_id, False):   # ← bandera en cada tick
-                    runner.close_instance(acc_id)
-                    db.update_account_state(acc_id, "disponible", notes="Detenido")
-                    return
-                inst_status = runner.active_instances.get(acc_id, {}).get("status", "")
-                db_st_wait = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-                if inst_status == "CONECTADA":
-                    break
-                if inst_status == "BLOQUEADA" or db_st_wait in ("bloqueado", "restringido"):
-                    print(f"[AutomationEngine] \ud83d\udeab '{acc_id}' bloqueada al conectar. Buscando reemplazo...")
-                    runner.close_instance(acc_id)
-                    blocked_accounts.add(acc_id)
-                    db.update_account_state(acc_id, "disponible", notes="Disponible")
-                    return
-                time.sleep(2)
-                wait_conn += 2
-
-        if self.job_stop_flags.get(job_id, False):
-            runner.close_instance(acc_id)
-            db.update_account_state(acc_id, "disponible", notes="Detenido")
-            return
-
-        final_status = runner.active_instances.get(acc_id, {}).get("status", "")
-        db_st_final = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-
-        if acc_id in blocked_accounts or final_status == "BLOQUEADA" or db_st_final in ("bloqueado", "restringido"):
-            if acc_id not in blocked_accounts:
-                blocked_accounts.add(acc_id)
-                runner.close_instance(acc_id)
-            print(f"[AutomationEngine] \u23ed\ufe0f Saltando cuenta bloqueada '{acc_id}'.")
-            return
-
-        if acc_id not in runner.active_instances or final_status != "CONECTADA":
-            print(f"[AutomationEngine] \u26a0\ufe0f '{acc_id}' no logró conectarse. Saltando...")
-            db.update_account_state(acc_id, "disponible", notes="No conectó a tiempo")
-            return
-
-        # Escanear chats no leídos
         try:
-            all_states = db.get_all_account_states()
-            peer_phones_set = {info["phone"] for info in all_states.values() if info.get("phone")}
-            res_scan = runner.check_and_process_unread_chats(
-                acc_id, peer_phones_set,
-                auto_reply_enabled=auto_reply_enabled,
-                auto_reply_message=auto_reply_message
-            )
-            if res_scan.get("notified_clients", 0) > 0:
-                print(f"[AutomationEngine] \ud83d\udd14 {res_scan['notified_clients']} cliente(s) notificados en '{acc_id}'")
-        except Exception as scan_err:
-            print(f"[AutomationEngine] Nota en escaneo: {scan_err}")
+            # 1. Verificar / Conectar cuenta
+            current_status = runner.active_instances.get(acc_id, {}).get("status", "")
+            db_st_check = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
 
-        # Ráfaga de mensajes
-        burst_limit = msgs_interval  # cada cuenta envía msgs_interval mensajes
-        for b in range(burst_limit):
-            # ── Bandera al inicio de cada mensaje ────────────────────────────────
-            if self.job_stop_flags.get(job_id, False):
-                break
+            if db_st_check in ("bloqueado", "restringido") or current_status == "BLOQUEADA":
+                print(f"[AutomationEngine] 🚫 '{acc_id}' BLOQUEADA/RESTRINGIDA. Saltando...")
+                runner.close_instance(acc_id)
+                blocked_accounts.add(acc_id)
+                return
 
-            # Tomar el próximo contacto de forma atómica
-            with sent_lock:
-                if contact_idx_holder[0] >= total_contacts:
-                    break
-                contact_idx = contact_idx_holder[0]
-                contact_idx_holder[0] += 1   # Reservar este índice
+            db.update_account_state(acc_id, "enviando", notes=f"Envío Real Job #{job_id}")
 
-            contact = contacts[contact_idx]
-            phone = contact.get("phone", "")
-            text = self._format_message(template_msg, contact, campaign_vars)
-            success, msg_response = runner.send_test_message(acc_id, phone, text)
-
-            if success:
-                with sent_lock:
-                    sent_count_holder[0] += 1
-                sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
-                consecutive_fails_per_acc[acc_id] = 0
-            else:
-                post_status = runner.active_instances.get(acc_id, {}).get("status", "")
-                db_st_post = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-
-                if post_status == "BLOQUEADA" or db_st_post in ("bloqueado", "restringido"):
-                    print(f"[AutomationEngine] \ud83d\udeab BLOQUEO confirmado en '{acc_id}'. Reemplazando cuenta...")
-                    runner.close_instance(acc_id)
-                    blocked_accounts.add(acc_id)
-                    if db_st_post not in ("bloqueado", "restringido"):
-                        db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante envío real.", force=True)
-                    with sent_lock:
-                        error_count_holder[0] += 1
-                    consecutive_fails_per_acc[acc_id] = 0
-                    break
-                else:
-                    recovered = False
-                    max_retries = 1
-                    for attempt in range(1, max_retries + 1):
-                        if self.job_stop_flags.get(job_id, False):   # ← bandera en reintento
-                            break
-                        print(f"[AutomationEngine] ⚠️ Fallo temporal en '{acc_id}' ({msg_response}). Reintento ({attempt}/{max_retries})...")
+            if acc_id not in runner.active_instances or current_status != "CONECTADA":
+                print(f"[AutomationEngine] 🔄 Abriendo navegador para cuenta '{acc_id}'...")
+                runner.open_session(acc_id)
+                wait_conn = 0
+                while wait_conn < 45:
+                    if self.job_stop_flags.get(job_id, False):
                         runner.close_instance(acc_id)
-                        time.sleep(2)
-                        if self.job_stop_flags.get(job_id, False):
-                            break
-                        runner.open_session(acc_id)
+                        db.update_account_state(acc_id, "disponible", notes="Detenido")
+                        return
+                    inst_status = runner.active_instances.get(acc_id, {}).get("status", "")
+                    db_st_wait = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+                    if inst_status == "CONECTADA":
+                        break
+                    if inst_status == "BLOQUEADA" or db_st_wait in ("bloqueado", "restringido"):
+                        print(f"[AutomationEngine] 🚫 '{acc_id}' bloqueada al conectar. Liberando...")
+                        runner.close_instance(acc_id)
+                        blocked_accounts.add(acc_id)
+                        db.update_account_state(acc_id, "disponible", notes="Disponible")
+                        return
+                    time.sleep(2)
+                    wait_conn += 2
 
-                        wait_conn = 0
-                        reconnected = False
-                        while wait_conn < 45:
-                            if self.job_stop_flags.get(job_id, False):   # ← bandera en wait
-                                break
-                            inst_st_rec = runner.active_instances.get(acc_id, {}).get("status", "")
-                            db_st_rec = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-                            if inst_st_rec == "CONECTADA":
-                                reconnected = True
-                                break
-                            if inst_st_rec == "BLOQUEADA" or db_st_rec in ("bloqueado", "restringido"):
-                                print(f"[AutomationEngine] 🚫 BLOQUEO al recuperar '{acc_id}'.")
-                                runner.close_instance(acc_id)
-                                blocked_accounts.add(acc_id)
-                                if db_st_rec not in ("bloqueado", "restringido"):
-                                    db.update_account_state(acc_id, "bloqueado", notes="Bloqueado al intentar recuperar sesión en envío real.", force=True)
-                                break
-                            time.sleep(2)
-                            wait_conn += 2
+            if self.job_stop_flags.get(job_id, False):
+                runner.close_instance(acc_id)
+                db.update_account_state(acc_id, "disponible", notes="Detenido")
+                return
 
-                        if acc_id in blocked_accounts or self.job_stop_flags.get(job_id, False):
-                            break
+            final_status = runner.active_instances.get(acc_id, {}).get("status", "")
+            db_st_final = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
 
-                        if not reconnected:
-                            print(f"[AutomationEngine] ❌ '{acc_id}' no logró reconectarse en reintento ({attempt}/{max_retries}).")
-                            continue
+            if acc_id in blocked_accounts or final_status == "BLOQUEADA" or db_st_final in ("bloqueado", "restringido"):
+                if acc_id not in blocked_accounts:
+                    blocked_accounts.add(acc_id)
+                    runner.close_instance(acc_id)
+                print(f"[AutomationEngine] ⏭️ Saltando cuenta bloqueada '{acc_id}'.")
+                return
 
-                        print(f"[AutomationEngine] 🔄 REINTENTO ({attempt}/{max_retries}) de envío en '{acc_id}' → {phone}...")
-                        success_retry, msg_retry = runner.send_test_message(acc_id, phone, text)
-                        if success_retry:
-                            with sent_lock:
-                                sent_count_holder[0] += 1
-                            sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
-                            consecutive_fails_per_acc[acc_id] = 0
-                            print(f"[AutomationEngine] ✅ Recuperación exitosa para '{acc_id}'. Mensaje enviado en reintento {attempt}/{max_retries}.")
-                            recovered = True
-                            break
+            if acc_id not in runner.active_instances or final_status != "CONECTADA":
+                print(f"[AutomationEngine] ⚠️ '{acc_id}' no logró conectarse. Saltando...")
+                db.update_account_state(acc_id, "disponible", notes="No conectó a tiempo")
+                return
 
-                        post_retry = runner.active_instances.get(acc_id, {}).get("status", "")
-                        db_st_retry = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
-                        if post_retry == "BLOQUEADA" or db_st_retry in ("bloqueado", "restringido"):
-                            print(f"[AutomationEngine] 🚫 BLOQUEO detectado durante reintento en '{acc_id}'.")
-                            runner.close_instance(acc_id)
-                            blocked_accounts.add(acc_id)
-                            if db_st_retry not in ("bloqueado", "restringido"):
-                                db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante reintento en envío real.", force=True)
-                            break
+            # 2. Bucle de envío continuo mientras la cuenta se mantenga en sesión activa
+            sent_in_current_run = 0
+            while not self.job_stop_flags.get(job_id, False):
+                # Verificar límite por sesión
+                if sent_in_session.get(acc_id, 0) >= msgs_session:
+                    print(f"[AutomationEngine] ⏸️ Límite por sesión alcanzado en '{acc_id}' ({sent_in_session[acc_id]}/{msgs_session} msgs). Iniciando reposo...")
+                    last_sent_timestamp[acc_id] = time.time()
+                    sent_in_session[acc_id] = 0
+                    break
 
-                    if acc_id in blocked_accounts:
+                # Tomar el próximo contacto de forma atómica
+                with sent_lock:
+                    if contact_idx_holder[0] >= total_contacts:
+                        break
+                    contact_idx = contact_idx_holder[0]
+                    contact_idx_holder[0] += 1   # Reservar este índice
+
+                contact = contacts[contact_idx]
+                phone = contact.get("phone", "")
+                text = self._format_message(template_msg, contact, campaign_vars)
+                success, msg_response = runner.send_test_message(acc_id, phone, text)
+
+                if success:
+                    with sent_lock:
+                        sent_count_holder[0] += 1
+                    sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
+                    consecutive_fails_per_acc[acc_id] = 0
+                    sent_in_current_run += 1
+                else:
+                    post_status = runner.active_instances.get(acc_id, {}).get("status", "")
+                    db_st_post = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+
+                    if post_status == "BLOQUEADA" or db_st_post in ("bloqueado", "restringido"):
+                        print(f"[AutomationEngine] 🚫 BLOQUEO confirmado en '{acc_id}'. Reemplazando cuenta...")
+                        runner.close_instance(acc_id)
+                        blocked_accounts.add(acc_id)
+                        if db_st_post not in ("bloqueado", "restringido"):
+                            db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante envío real.", force=True)
                         with sent_lock:
                             error_count_holder[0] += 1
                         consecutive_fails_per_acc[acc_id] = 0
                         break
-
-                    if not recovered:
-                        with sent_lock:
-                            error_count_holder[0] += 1
-                        consecutive_fails_per_acc[acc_id] = consecutive_fails_per_acc.get(acc_id, 0) + 1
-
-                        if consecutive_fails_per_acc[acc_id] < 5:
-                            print(f"[AutomationEngine] ⚠️ Fallo en número {phone} en '{acc_id}' "
-                                  f"(Fallos consecutivos acumulados: {consecutive_fails_per_acc[acc_id]}/5). Probando con el número SIGUIENTE...")
-                            continue
-                        else:
-                            print(f"[AutomationEngine] 🚫 Fallo consecutivo en 5 números distintos en '{acc_id}'. "
-                                  f"Aplicando acción de bloqueo/reemplazo...")
+                    else:
+                        recovered = False
+                        max_retries = 1
+                        for attempt in range(1, max_retries + 1):
+                            if self.job_stop_flags.get(job_id, False):
+                                break
+                            print(f"[AutomationEngine] ⚠️ Fallo temporal en '{acc_id}' ({msg_response}). Reintento ({attempt}/{max_retries})...")
                             runner.close_instance(acc_id)
-                            blocked_accounts.add(acc_id)
-                            db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente en 5 números consecutivos.", force=True)
+                            time.sleep(2)
+                            if self.job_stop_flags.get(job_id, False):
+                                break
+                            runner.open_session(acc_id)
+
+                            wait_conn = 0
+                            reconnected = False
+                            while wait_conn < 45:
+                                if self.job_stop_flags.get(job_id, False):
+                                    break
+                                inst_st_rec = runner.active_instances.get(acc_id, {}).get("status", "")
+                                db_st_rec = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+                                if inst_st_rec == "CONECTADA":
+                                    reconnected = True
+                                    break
+                                if inst_st_rec == "BLOQUEADA" or db_st_rec in ("bloqueado", "restringido"):
+                                    print(f"[AutomationEngine] 🚫 BLOQUEO al recuperar '{acc_id}'.")
+                                    runner.close_instance(acc_id)
+                                    blocked_accounts.add(acc_id)
+                                    if db_st_rec not in ("bloqueado", "restringido"):
+                                        db.update_account_state(acc_id, "bloqueado", notes="Bloqueado al intentar recuperar sesión en envío real.", force=True)
+                                    break
+                                time.sleep(2)
+                                wait_conn += 2
+
+                            if acc_id in blocked_accounts or self.job_stop_flags.get(job_id, False):
+                                break
+
+                            if not reconnected:
+                                print(f"[AutomationEngine] ❌ '{acc_id}' no logró reconectarse en reintento ({attempt}/{max_retries}).")
+                                continue
+
+                            print(f"[AutomationEngine] 🔄 REINTENTO ({attempt}/{max_retries}) de envío en '{acc_id}' → {phone}...")
+                            success_retry, msg_retry = runner.send_test_message(acc_id, phone, text)
+                            if success_retry:
+                                with sent_lock:
+                                    sent_count_holder[0] += 1
+                                sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
+                                consecutive_fails_per_acc[acc_id] = 0
+                                sent_in_current_run += 1
+                                print(f"[AutomationEngine] ✅ Recuperación exitosa para '{acc_id}'. Mensaje enviado en reintento {attempt}/{max_retries}.")
+                                recovered = True
+                                break
+
+                            post_retry = runner.active_instances.get(acc_id, {}).get("status", "")
+                            db_st_retry = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+                            if post_retry == "BLOQUEADA" or db_st_retry in ("bloqueado", "restringido"):
+                                print(f"[AutomationEngine] 🚫 BLOQUEO detectado durante reintento en '{acc_id}'.")
+                                runner.close_instance(acc_id)
+                                blocked_accounts.add(acc_id)
+                                if db_st_retry not in ("bloqueado", "restringido"):
+                                    db.update_account_state(acc_id, "bloqueado", notes="Bloqueado durante reintento en envío real.", force=True)
+                                break
+
+                        if acc_id in blocked_accounts:
+                            with sent_lock:
+                                error_count_holder[0] += 1
                             consecutive_fails_per_acc[acc_id] = 0
                             break
 
-            with sent_lock:
-                c_sent = sent_count_holder[0]
-                c_err = error_count_holder[0]
-                c_idx = contact_idx_holder[0]
-            progress_pct = int((c_idx / total_contacts) * 100) if total_contacts > 0 else 0
-            db.update_automation_job_status(
-                job_id, "running",
-                sent=c_sent,
-                errors=c_err,
-                progress=progress_pct
-            )
+                        if not recovered:
+                            with sent_lock:
+                                error_count_holder[0] += 1
+                            consecutive_fails_per_acc[acc_id] = consecutive_fails_per_acc.get(acc_id, 0) + 1
 
-            if b < burst_limit - 1:
+                            if consecutive_fails_per_acc[acc_id] < 5:
+                                print(f"[AutomationEngine] ⚠️ Fallo en número {phone} en '{acc_id}' "
+                                      f"(Fallos consecutivos acumulados: {consecutive_fails_per_acc[acc_id]}/5). Probando con el número SIGUIENTE...")
+                                continue
+                            else:
+                                print(f"[AutomationEngine] 🚫 Fallo consecutivo en 5 números distintos en '{acc_id}'. "
+                                      f"Aplicando acción de bloqueo/reemplazo...")
+                                runner.close_instance(acc_id)
+                                blocked_accounts.add(acc_id)
+                                db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente en 5 números consecutivos.", force=True)
+                                consecutive_fails_per_acc[acc_id] = 0
+                                break
+
+                # Actualizar estado del trabajo en la BD
+                with sent_lock:
+                    c_sent = sent_count_holder[0]
+                    c_err = error_count_holder[0]
+                    c_idx = contact_idx_holder[0]
+                progress_pct = int((c_idx / total_contacts) * 100) if total_contacts > 0 else 0
+                db.update_automation_job_status(
+                    job_id, "running",
+                    sent=c_sent,
+                    errors=c_err,
+                    progress=progress_pct
+                )
+
+                # Escanear chats no leídos periódicamente (cada msgs_interval envíos)
+                if sent_in_current_run % msgs_interval == 0:
+                    try:
+                        all_states_post = db.get_all_account_states()
+                        peer_phones_post = {info["phone"] for info in all_states_post.values() if info.get("phone")}
+                        res_post = runner.check_and_process_unread_chats(
+                            acc_id, peer_phones_post,
+                            auto_reply_enabled=auto_reply_enabled,
+                            auto_reply_message=auto_reply_message
+                        )
+                        if res_post.get("notified_clients", 0) > 0:
+                            print(f"[AutomationEngine] 🔔 [Post-envío] {res_post['notified_clients']} cliente(s) notificados en '{acc_id}'")
+                    except Exception as scan_post_err:
+                        print(f"[AutomationEngine] Nota en escaneo post-envío: {scan_post_err}")
+
+                # Demora humana entre envíos
                 if not human_delay(delay_min, delay_max, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
                     break
 
-        last_sent_timestamp[acc_id] = time.time()
-
-        # Escanear chats no leídos POST-RÁFAGA
-        if not self.job_stop_flags.get(job_id, False):
-            try:
-                all_states_post = db.get_all_account_states()
-                peer_phones_post = {info["phone"] for info in all_states_post.values() if info.get("phone")}
-                res_post = runner.check_and_process_unread_chats(
-                    acc_id, peer_phones_post,
-                    auto_reply_enabled=auto_reply_enabled,
-                    auto_reply_message=auto_reply_message
-                )
-                if res_post.get("notified_clients", 0) > 0:
-                    print(f"[AutomationEngine] \ud83d\udd14 [Post-ráfaga] {res_post['notified_clients']} cliente(s) notificados en '{acc_id}'")
-            except Exception as scan_post_err:
-                print(f"[AutomationEngine] Nota en escaneo post-ráfaga: {scan_post_err}")
-
-        # \ud83e\uddf9 Cerrar navegador tras ráfaga de envío
-        print(f"[AutomationEngine] \ud83e\uddf9 Libera recursos: Cerrando navegador de '{acc_id}' tras completar ráfaga de envío.")
-        runner.close_instance(acc_id)
-        db.update_account_state(acc_id, "disponible", notes="Disponible")
+        finally:
+            # 🧹 Cerrar la instancia al terminar el hilo (sesión completada, reposo o bloqueo)
+            print(f"[AutomationEngine] 🧹 Cerrando navegador de '{acc_id}' (fin de ciclo o reposo). El pool asignará reemplazo si hay cupos.")
+            runner.close_instance(acc_id)
+            db_st_fin = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+            if db_st_fin not in ("bloqueado", "restringido") and acc_id not in blocked_accounts:
+                db.update_account_state(acc_id, "disponible", notes="Disponible")
 
     # ──────────────────────────────────────────────────────────────────────────
     # WORKER DE HISTORIAL — cuenta individual (corre en hilo propio por tanda)
