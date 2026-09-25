@@ -86,7 +86,22 @@ class WhatsAppRunner:
             )
             context.on("close", lambda ctx: self._handle_manual_close(account_id))
             apply_stealth_to_context(context)
+            # Tomar la primera página y cerrar cualquier pestaña extra restaurada por el perfil persistente
             page: Page = context.pages[0] if context.pages else context.new_page()
+            for extra_page in context.pages[1:]:
+                try:
+                    extra_page.close()
+                except Exception:
+                    pass
+            
+            def _close_extra_tabs(new_p: Page):
+                try:
+                    if len(context.pages) > 1 and new_p != page:
+                        new_p.close()
+                except Exception:
+                    pass
+
+            context.on("page", _close_extra_tabs)
             page._account_id = account_id
 
             task_queue = queue.Queue()
@@ -214,7 +229,22 @@ class WhatsAppRunner:
             )
             context.on("close", lambda ctx: self._handle_manual_close(account_id))
             apply_stealth_to_context(context)
+            # Tomar la primera página y cerrar cualquier pestaña extra restaurada por el perfil persistente
             page: Page = context.pages[0] if context.pages else context.new_page()
+            for extra_page in context.pages[1:]:
+                try:
+                    extra_page.close()
+                except Exception:
+                    pass
+
+            def _close_extra_tabs(new_p: Page):
+                try:
+                    if len(context.pages) > 1 and new_p != page:
+                        new_p.close()
+                except Exception:
+                    pass
+
+            context.on("page", _close_extra_tabs)
             page._account_id = account_id
 
             task_queue = queue.Queue()

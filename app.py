@@ -618,8 +618,8 @@ def update_job_status(job_id):
             db.update_automation_job_status(job_id, "paused")
             return jsonify({"status": "error", "message": msg}), 400
     elif new_status in ("paused", "completed", "error"):
-        automation_engine.stop_job(job_id)
-        db.update_automation_job_status(job_id, "pausing" if new_status == "paused" else new_status)
+        automation_engine.terminate_job(job_id)
+        db.update_automation_job_status(job_id, new_status)
         job = db.get_automation_job(job_id)
         if job:
             for acc_id in job.get("account_ids", []):
@@ -636,9 +636,9 @@ def terminate_automation_job(job_id):
 
 @app.route("/api/automation/jobs/<int:job_id>", methods=["DELETE"])
 def delete_automation_job(job_id):
-    # Si el job está activo, terminarlo primero para liberar recursos
+    # Detener forzosamente cualquier recurso del job antes de eliminarlo
     job = db.get_automation_job(job_id)
-    if job and job.get("status") in ("running", "pausing"):
+    if job:
         automation_engine.terminate_job(job_id)
     deleted = db.delete_automation_job(job_id)
     if deleted:
