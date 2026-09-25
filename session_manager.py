@@ -33,11 +33,25 @@ class SessionManager:
             folder_name = p_dir.name
             if not folder_name:
                 return
-            # Filtrar por la carpeta exacta del perfil (ej: "profiles\account_id\" o "profiles/account_id/")
-            ps_cmd = f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | Where-Object {{ $_.CommandLine -like '*profiles\\{folder_name}\\*' -or $_.CommandLine -like '*profiles/{folder_name}/*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
-            subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, timeout=5)
+
+            # PowerShell kill por nombre de carpeta de perfil (coincidencia flexible sin requerir slash final)
+            ps_cmd = (
+                f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | "
+                f"Where-Object {{ $_.CommandLine -like '*{folder_name}*' }} | "
+                f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+            )
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=5)
         except Exception as e:
-            print(f"Error forzando cierre de procesos para {account_id}: {e}")
+            print(f"Error forzando cierre de procesos ps para {account_id}: {e}")
+
+        try:
+            # Fallback secundario wmic en cmd
+            wmic_cmd = f"wmic process where \"name='chrome.exe' and commandline like '%{folder_name}%'\" call terminate"
+            subprocess.run(wmic_cmd, shell=True, capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+        time.sleep(0.3)
 
     @staticmethod
     def unlock_profile(account_id: str):
