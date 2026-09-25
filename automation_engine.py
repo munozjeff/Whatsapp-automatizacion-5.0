@@ -542,11 +542,11 @@ class AutomationEngine:
                     break
                 else:
                     recovered = False
-                    max_retries = 3
+                    max_retries = 1
                     for attempt in range(1, max_retries + 1):
                         if self.job_stop_flags.get(job_id, False):   # ← bandera en reintento
                             break
-                        print(f"[AutomationEngine] \u26a0\ufe0f Fallo temporal en '{acc_id}' ({msg_response}). Reintento ({attempt}/{max_retries})...")
+                        print(f"[AutomationEngine] ⚠️ Fallo temporal en '{acc_id}' ({msg_response}). Reintento ({attempt}/{max_retries})...")
                         runner.close_instance(acc_id)
                         time.sleep(2)
                         if self.job_stop_flags.get(job_id, False):
@@ -564,7 +564,7 @@ class AutomationEngine:
                                 reconnected = True
                                 break
                             if inst_st_rec == "BLOQUEADA" or db_st_rec in ("bloqueado", "restringido"):
-                                print(f"[AutomationEngine] \ud83d\udeab BLOQUEO al recuperar '{acc_id}'.")
+                                print(f"[AutomationEngine] 🚫 BLOQUEO al recuperar '{acc_id}'.")
                                 runner.close_instance(acc_id)
                                 blocked_accounts.add(acc_id)
                                 if db_st_rec not in ("bloqueado", "restringido"):
@@ -577,24 +577,24 @@ class AutomationEngine:
                             break
 
                         if not reconnected:
-                            print(f"[AutomationEngine] \u274c '{acc_id}' no logró reconectarse en reintento ({attempt}/{max_retries}).")
+                            print(f"[AutomationEngine] ❌ '{acc_id}' no logró reconectarse en reintento ({attempt}/{max_retries}).")
                             continue
 
-                        print(f"[AutomationEngine] \ud83d\udd04 REINTENTO ({attempt}/{max_retries}) de envío en '{acc_id}' → {phone}...")
+                        print(f"[AutomationEngine] 🔄 REINTENTO ({attempt}/{max_retries}) de envío en '{acc_id}' → {phone}...")
                         success_retry, msg_retry = runner.send_test_message(acc_id, phone, text)
                         if success_retry:
                             with sent_lock:
                                 sent_count_holder[0] += 1
                             sent_in_session[acc_id] = sent_in_session.get(acc_id, 0) + 1
                             consecutive_fails_per_acc[acc_id] = 0
-                            print(f"[AutomationEngine] \u2705 Recuperación exitosa para '{acc_id}'. Mensaje enviado en reintento {attempt}/{max_retries}.")
+                            print(f"[AutomationEngine] ✅ Recuperación exitosa para '{acc_id}'. Mensaje enviado en reintento {attempt}/{max_retries}.")
                             recovered = True
                             break
 
                         post_retry = runner.active_instances.get(acc_id, {}).get("status", "")
                         db_st_retry = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
                         if post_retry == "BLOQUEADA" or db_st_retry in ("bloqueado", "restringido"):
-                            print(f"[AutomationEngine] \ud83d\udeab BLOQUEO detectado durante reintento en '{acc_id}'.")
+                            print(f"[AutomationEngine] 🚫 BLOQUEO detectado durante reintento en '{acc_id}'.")
                             runner.close_instance(acc_id)
                             blocked_accounts.add(acc_id)
                             if db_st_retry not in ("bloqueado", "restringido"):
@@ -612,16 +612,16 @@ class AutomationEngine:
                             error_count_holder[0] += 1
                         consecutive_fails_per_acc[acc_id] = consecutive_fails_per_acc.get(acc_id, 0) + 1
 
-                        if consecutive_fails_per_acc[acc_id] < 2:
-                            print(f"[AutomationEngine] \u26a0\ufe0f Fallo en número {phone} tras 3 reintentos en '{acc_id}'. "
-                                  f"Probando con el número SIGUIENTE...")
+                        if consecutive_fails_per_acc[acc_id] < 5:
+                            print(f"[AutomationEngine] ⚠️ Fallo en número {phone} en '{acc_id}' "
+                                  f"(Fallos consecutivos acumulados: {consecutive_fails_per_acc[acc_id]}/5). Probando con el número SIGUIENTE...")
                             continue
                         else:
-                            print(f"[AutomationEngine] \ud83d\udeab Fallo consecutivo en 2 números distintos en '{acc_id}'. "
+                            print(f"[AutomationEngine] 🚫 Fallo consecutivo en 5 números distintos en '{acc_id}'. "
                                   f"Aplicando acción de bloqueo/reemplazo...")
                             runner.close_instance(acc_id)
                             blocked_accounts.add(acc_id)
-                            db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente.", force=True)
+                            db.update_account_state(acc_id, "bloqueado", notes=f"Bloqueado por fallo persistente en 5 números consecutivos.", force=True)
                             consecutive_fails_per_acc[acc_id] = 0
                             break
 
