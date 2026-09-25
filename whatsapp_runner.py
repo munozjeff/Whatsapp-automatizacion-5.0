@@ -929,13 +929,69 @@ class WhatsAppRunner:
                                             break;
                                         }
                                     }
+
+                                    if (nodes.length === 0) {
+                                        const rows = mainEl.querySelectorAll('div[role="row"]');
+                                        rows.forEach(r => {
+                                            const inEl = r.querySelector('div.message-in, div[class*="message-in"], div[data-id*="false_"]');
+                                            if (inEl) nodes.push(inEl);
+                                        });
+                                    }
+
                                     nodes.forEach(n => {
                                         const preEl = n.closest('[data-pre-plain-text]') || n.querySelector('[data-pre-plain-text]');
                                         const pre = preEl ? (preEl.getAttribute('data-pre-plain-text') || '') : '';
                                         const ts = pre.includes(']') ? pre.split(']')[0].replace('[', '').trim() : '';
-                                        
-                                        const textEl = n.querySelector('span.selectable-text, span[copyable-text], div._akbu, span[dir="auto"], span[dir="ltr"]') || n;
-                                        const txt = (textEl.innerText || textEl.textContent || '').trim();
+
+                                        let txt = '';
+                                        const selectorsText = [
+                                            'span.selectable-text.copyable-text',
+                                            'span.selectable-text',
+                                            'span.copyable-text',
+                                            '[data-lexical-text="true"]',
+                                            'div._akbu',
+                                            'span[dir="ltr"]',
+                                            'span[dir="auto"]'
+                                        ];
+
+                                        for (const st of selectorsText) {
+                                            const el = n.querySelector(st);
+                                            if (el && el.innerText && el.innerText.trim().length > 0) {
+                                                txt = el.innerText.trim();
+                                                break;
+                                            }
+                                        }
+
+                                        if (!txt) {
+                                            const spans = Array.from(n.querySelectorAll('span'));
+                                            for (const sp of spans) {
+                                                const spTxt = (sp.innerText || sp.textContent || '').trim();
+                                                if (spTxt && spTxt.length > 0 && !sp.querySelector('svg') && !sp.getAttribute('aria-label')) {
+                                                    if (!/^\d{1,2}:\d{2}(\s?[ap]\.?\s?m\.?)?$/i.test(spTxt)) {
+                                                        txt = spTxt;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (!txt) {
+                                            if (n.querySelector('audio, [data-testid="audio-player"], span[data-icon*="audio"]')) {
+                                                txt = "[Audio / Nota de voz]";
+                                            } else if (n.querySelector('img, [data-testid="image-thumb"]')) {
+                                                txt = "[Imagen]";
+                                            } else if (n.querySelector('video, [data-testid="video-thumb"]')) {
+                                                txt = "[Video]";
+                                            } else if (n.querySelector('[data-testid="document-thumb"], [data-icon*="document"]')) {
+                                                txt = "[Documento]";
+                                            } else if (n.querySelector('[data-icon*="sticker"]')) {
+                                                txt = "[Sticker]";
+                                            } else {
+                                                const rawAll = (n.innerText || n.textContent || '').trim();
+                                                txt = rawAll.replace(/\d{1,2}:\d{2}\s?([ap]\.?\s?m\.?)?/gi, '').trim();
+                                            }
+                                        }
+
                                         if (txt && txt.length > 0) {
                                             res.push(ts ? `[${ts}] ${txt}` : txt);
                                         }
@@ -948,11 +1004,11 @@ class WhatsAppRunner:
                                 client_messages = []
 
                             # GARANTÍA: Al ser un chat abierto desde un badge no leído, DEBE haber al menos 1 mensaje.
-                            # Si la extracción JS falló por variaciones de clases en WhatsApp Web, forzar fallback.
+                            # Si la extracción JS falló por variaciones extremas de clases en WhatsApp Web, forzar fallback.
                             if not client_messages:
                                 client_messages = ["Mensaje del cliente"]
 
-                            print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}'.")
+                            print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}': {client_messages}")
 
                             # ── Paso C: Decidir acción según reglas exactas ────────────────
                             #
