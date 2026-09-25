@@ -851,24 +851,58 @@ class WhatsAppRunner:
                             is_friend = True
                             print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por patrón autogenerado. Omitiendo notificación cliente.")
 
+                        # Extraer vista previa del mensaje entrante en la fila del panel lateral (#pane-side) antes de hacer clic
+                        row_snippet = ""
+                        try:
+                            row_snippet = row.evaluate("""el => {
+                                const spans = Array.from(el.querySelectorAll('span[title], span[dir="auto"], span.dir-ltr, div[class*="_ak8l"], div[class*="_ak8i"]'));
+                                for (const sp of spans) {
+                                    const t = (sp.innerText || sp.textContent || '').trim();
+                                    if (t && t.length > 2 && !sp.getAttribute('title')) {
+                                        if (!/^\\d{1,2}:\\d{2}(\\s?[ap]\\.?\\s?m\\.?)?$/i.test(t)) {
+                                            return t;
+                                        }
+                                    }
+                                }
+                                return '';
+                            }""")
+                        except Exception:
+                            pass
+
                         # Abrir el chat haciendo clic en el row
                         click_ok = False
                         try:
                             row.click(force=True, timeout=2000)
                             click_ok = True
-                            time.sleep(1)
                         except Exception:
                             try:
                                 safe_name = chat_name.replace("'", "\\'")
                                 alt = page.locator(f"//span[@title='{safe_name}']/ancestor::div[@role='row']").first
                                 alt.click(force=True, timeout=2000)
                                 click_ok = True
-                                time.sleep(1)
                             except Exception:
                                 pass
 
                         if not click_ok:
                             continue
+
+                        # Esperar activamente a que el panel #main renderice las burbujas de la conversación
+                        deadline_main = time.time() + 2.5
+                        while time.time() < deadline_main:
+                            if page.is_closed():
+                                break
+                            try:
+                                main_ready = page.evaluate("""() => {
+                                    const m = document.querySelector('#main');
+                                    if (!m) return false;
+                                    const msgs = m.querySelectorAll('div.message-in, div.message-out, div[class*="message-in"], div[data-id], div[role="row"]');
+                                    return msgs && msgs.length > 0;
+                                }""")
+                                if main_ready:
+                                    break
+                            except Exception:
+                                pass
+                            time.sleep(0.3)
 
                         processed_in_this_pass += 1
 
@@ -1004,9 +1038,13 @@ class WhatsAppRunner:
                                 client_messages = []
 
                             # GARANTÍA: Al ser un chat abierto desde un badge no leído, DEBE haber al menos 1 mensaje.
-                            # Si la extracción JS falló por variaciones extremas de clases en WhatsApp Web, forzar fallback.
+                            # Si la extracción JS del panel #main no encontró elementos, usar la vista previa del panel lateral (row_snippet).
                             if not client_messages:
-                                client_messages = ["Mensaje del cliente"]
+                                if row_snippet:
+                                    client_messages = [row_snippet]
+                                    print(f"[{account_id}] ℹ️ Usando vista previa de la fila lateral para '{chat_name}': '{row_snippet}'")
+                                else:
+                                    client_messages = [f"Mensaje recibido de {chat_name}"]
 
                             print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}': {client_messages}")
 
