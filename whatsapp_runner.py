@@ -851,17 +851,32 @@ class WhatsAppRunner:
                             is_friend = True
                             print(f"[{account_id}] 🛡️ '{chat_name}' identificado como cuenta propia por patrón autogenerado. Omitiendo notificación cliente.")
 
-                        # Extraer vista previa del mensaje entrante en la fila del panel lateral (#pane-side) antes de hacer clic
+                        # ── ETAPA 1: Extraer texto de vista previa del panel lateral ANTES del clic ─────
                         row_snippet = ""
                         try:
                             row_snippet = row.evaluate("""el => {
-                                const spans = Array.from(el.querySelectorAll('span[title], span[dir="auto"], span.dir-ltr, div[class*="_ak8l"], div[class*="_ak8i"]'));
-                                for (const sp of spans) {
-                                    const t = (sp.innerText || sp.textContent || '').trim();
-                                    if (t && t.length > 2 && !sp.getAttribute('title')) {
-                                        if (!/^\\d{1,2}:\\d{2}(\\s?[ap]\\.?\\s?m\\.?)?$/i.test(t)) {
-                                            return t;
-                                        }
+                                // Busca el texto del último mensaje en la fila del panel lateral
+                                const allText = (el.innerText || '').split('\n').map(s => s.trim()).filter(s =>
+                                    s.length > 1 &&
+                                    !/^\\d{1,2}:\\d{2}/.test(s) &&
+                                    !/^(Tú:|You:|✓|✓✓|\\ud83d|\\ud83c)/i.test(s)
+                                );
+                                // El último item suele ser el contenido del mensaje
+                                if (allText.length > 0) return allText[allText.length - 1];
+
+                                // Fallback: selectores específicos del panel lateral
+                                const PREVIEW_SELECTORS = [
+                                    'span[dir="ltr"]',
+                                    'span[dir="auto"]',
+                                    'span[class*="_ak8j"]',
+                                    'span[class*="_ak8k"]',
+                                    'span[class*="_ak8l"]'
+                                ];
+                                for (const sel of PREVIEW_SELECTORS) {
+                                    const found = el.querySelectorAll(sel);
+                                    for (const sp of found) {
+                                        const t = (sp.innerText || sp.textContent || '').trim();
+                                        if (t && t.length > 1 && !/^\\d{1,2}:\\d{2}/i.test(t)) return t;
                                     }
                                 }
                                 return '';
@@ -886,8 +901,9 @@ class WhatsAppRunner:
                         if not click_ok:
                             continue
 
-                        # Esperar activamente a que el panel #main renderice las burbujas de la conversación
-                        deadline_main = time.time() + 2.5
+                        # ── ETAPA 2: Esperar que #main hidrate las burbujas del historial ────────────
+                        # Esperamos el atributo estable data-pre-plain-text que WhatsApp Web pone en cada burbuja
+                        deadline_main = time.time() + 4.0
                         while time.time() < deadline_main:
                             if page.is_closed():
                                 break
@@ -895,14 +911,19 @@ class WhatsAppRunner:
                                 main_ready = page.evaluate("""() => {
                                     const m = document.querySelector('#main');
                                     if (!m) return false;
-                                    const msgs = m.querySelectorAll('div.message-in, div.message-out, div[class*="message-in"], div[data-id], div[role="row"]');
-                                    return msgs && msgs.length > 0;
+                                    // data-pre-plain-text es el atributo MÁS estable: está en las burbujas con remitente/hora
+                                    if (m.querySelectorAll('[data-pre-plain-text]').length > 0) return true;
+                                    // También aceptar elementos con data-id (contenedores de burbuja)
+                                    if (m.querySelectorAll('div[data-id]').length > 0) return true;
+                                    // Y copyable-text que contiene el texto copiable
+                                    if (m.querySelectorAll('[copyable-text]').length > 0) return true;
+                                    return false;
                                 }""")
                                 if main_ready:
                                     break
                             except Exception:
                                 pass
-                            time.sleep(0.3)
+                            time.sleep(0.25)
 
                         processed_in_this_pass += 1
 
@@ -945,106 +966,127 @@ class WhatsAppRunner:
                             num_salidas = self._contar_mensajes_salida(page, account_id)
 
                             # ── Paso B: Leer mensajes ENTRANTES del cliente ───────────────
+                            # Estrategia basada en atributos ESTABLES de WhatsApp Web:
+                            # - data-pre-plain-text: presente en cada contenedor de burbuja, indica el remitente y hora
+                            # - copyable-text: presente en el span interior con el texto del mensaje
+                            # Los data-id con prefijo "false_" son mensajes RECIBIDOS (incoming)
                             client_messages = []
                             try:
                                 js_read_in = """() => {
-                                    const mainEl = document.querySelector('#main') || document;
+                                    const main = document.querySelector('#main');
+                                    if (!main) return [];
                                     const res = [];
-                                    const selectors = [
-                                        'div.message-in',
-                                        'div[class*="message-in"]',
-                                        'div[data-id*="false_"]'
-                                    ];
-                                    let nodes = [];
-                                    for (const s of selectors) {
-                                        const found = mainEl.querySelectorAll(s);
-                                        if (found && found.length > 0) {
-                                            nodes = Array.from(found);
-                                            break;
-                                        }
-                                    }
 
-                                    if (nodes.length === 0) {
-                                        const rows = mainEl.querySelectorAll('div[role="row"]');
-                                        rows.forEach(r => {
-                                            const inEl = r.querySelector('div.message-in, div[class*="message-in"], div[data-id*="false_"]');
-                                            if (inEl) nodes.push(inEl);
-                                        });
-                                    }
+                                    // MÉTODO 1 (más fiable): burbujas con data-pre-plain-text que contengan el número/remitente
+                                    // En WhatsApp Web, data-pre-plain-text tiene el formato: "[HH:MM, DD/MM/YYYY] Nombre: "
+                                    // Los mensajes PROPIOS (outgoing) tienen data-pre-plain-text con el nombre de la cuenta
+                                    // Los mensajes RECIBIDOS tienen data-pre-plain-text con el nombre del contacto
+                                    // Adicionalmente, los contenedores de burbuja recibida tienen data-id con prefijo "false_"
 
-                                    nodes.forEach(n => {
-                                        const preEl = n.closest('[data-pre-plain-text]') || n.querySelector('[data-pre-plain-text]');
-                                        const pre = preEl ? (preEl.getAttribute('data-pre-plain-text') || '') : '';
-                                        const ts = pre.includes(']') ? pre.split(']')[0].replace('[', '').trim() : '';
+                                    const allBubbles = Array.from(main.querySelectorAll('[data-pre-plain-text]'));
+                                    allBubbles.forEach(bubble => {
+                                        const pre = bubble.getAttribute('data-pre-plain-text') || '';
+                                        // Determinar si es mensaje RECIBIDO: buscar si el contenedor padre tiene data-id
+                                        const container = bubble.closest('[data-id]') || bubble;
+                                        const dataId = container.getAttribute('data-id') || '';
+                                        // data-id "false_xxx" → recibido, "true_xxx" → enviado por nosotros
+                                        const isIncoming = dataId.startsWith('false_');
+                                        if (!isIncoming && dataId) return; // saltar mensajes enviados
 
+                                        // Extraer hora del data-pre-plain-text
+                                        const tsMatch = pre.match(/\\[(\\d{1,2}:\\d{2}[^\\]]*?)\\]/);
+                                        const ts = tsMatch ? tsMatch[1].trim() : '';
+
+                                        // Extraer texto por copyable-text (el más confiable en WhatsApp Web)
                                         let txt = '';
-                                        const selectorsText = [
-                                            'span.selectable-text.copyable-text',
-                                            'span.selectable-text',
-                                            'span.copyable-text',
-                                            '[data-lexical-text="true"]',
-                                            'div._akbu',
-                                            'span[dir="ltr"]',
-                                            'span[dir="auto"]'
-                                        ];
-
-                                        for (const st of selectorsText) {
-                                            const el = n.querySelector(st);
-                                            if (el && el.innerText && el.innerText.trim().length > 0) {
-                                                txt = el.innerText.trim();
-                                                break;
-                                            }
+                                        const copyableEl = bubble.querySelector('[copyable-text]');
+                                        if (copyableEl) {
+                                            txt = (copyableEl.innerText || copyableEl.textContent || '').trim();
                                         }
 
+                                        // Fallback: selectable-text
                                         if (!txt) {
-                                            const spans = Array.from(n.querySelectorAll('span'));
-                                            for (const sp of spans) {
-                                                const spTxt = (sp.innerText || sp.textContent || '').trim();
-                                                if (spTxt && spTxt.length > 0 && !sp.querySelector('svg') && !sp.getAttribute('aria-label')) {
-                                                    if (!/^\d{1,2}:\d{2}(\s?[ap]\.?\s?m\.?)?$/i.test(spTxt)) {
-                                                        txt = spTxt;
-                                                        break;
-                                                    }
-                                                }
-                                            }
+                                            const selEl = bubble.querySelector('span.selectable-text, span[class*="selectable"]');
+                                            if (selEl) txt = (selEl.innerText || selEl.textContent || '').trim();
                                         }
 
+                                        // Fallback: data-lexical-text
                                         if (!txt) {
-                                            if (n.querySelector('audio, [data-testid="audio-player"], span[data-icon*="audio"]')) {
-                                                txt = "[Audio / Nota de voz]";
-                                            } else if (n.querySelector('img, [data-testid="image-thumb"]')) {
-                                                txt = "[Imagen]";
-                                            } else if (n.querySelector('video, [data-testid="video-thumb"]')) {
-                                                txt = "[Video]";
-                                            } else if (n.querySelector('[data-testid="document-thumb"], [data-icon*="document"]')) {
-                                                txt = "[Documento]";
-                                            } else if (n.querySelector('[data-icon*="sticker"]')) {
-                                                txt = "[Sticker]";
-                                            } else {
-                                                const rawAll = (n.innerText || n.textContent || '').trim();
-                                                txt = rawAll.replace(/\d{1,2}:\d{2}\s?([ap]\.?\s?m\.?)?/gi, '').trim();
-                                            }
+                                            const lexEl = bubble.querySelector('[data-lexical-text="true"]');
+                                            if (lexEl) txt = (lexEl.innerText || '').trim();
+                                        }
+
+                                        // Fallback: detectar contenido multimedia
+                                        if (!txt) {
+                                            if (bubble.querySelector('audio, [data-testid*="audio"]')) txt = '[Audio]';
+                                            else if (bubble.querySelector('[data-testid*="image"], img[src*="blob:"]')) txt = '[Imagen]';
+                                            else if (bubble.querySelector('[data-testid*="video"], video')) txt = '[Video]';
+                                            else if (bubble.querySelector('[data-testid*="document"]')) txt = '[Documento]';
+                                            else if (bubble.querySelector('[data-testid*="sticker"]')) txt = '[Sticker]';
+                                        }
+
+                                        // Último recurso: innerText del bubble completo sin timestamps
+                                        if (!txt) {
+                                            txt = (bubble.innerText || '').replace(/\\d{1,2}:\\d{2}(\\s?[ap]\\.?\\s?m\\.?)?/gi, '').trim();
                                         }
 
                                         if (txt && txt.length > 0) {
                                             res.push(ts ? `[${ts}] ${txt}` : txt);
                                         }
                                     });
+
+                                    // MÉTODO 2 (fallback si no hay data-pre-plain-text): data-id con prefijo false_
+                                    if (res.length === 0) {
+                                        const byDataId = Array.from(main.querySelectorAll('div[data-id^="false_"]'));
+                                        byDataId.forEach(el => {
+                                            let txt = '';
+                                            const c = el.querySelector('[copyable-text]');
+                                            if (c) txt = (c.innerText || c.textContent || '').trim();
+                                            if (!txt) {
+                                                const s = el.querySelector('span.selectable-text');
+                                                if (s) txt = (s.innerText || '').trim();
+                                            }
+                                            if (txt && txt.length > 0) res.push(txt);
+                                        });
+                                    }
+
                                     return res;
                                 }"""
                                 client_messages = page.evaluate(js_read_in) or []
+                                if client_messages:
+                                    print(f"[{account_id}] ✅ Extracción JS exitosa: {len(client_messages)} mensajes")
                             except Exception as read_err:
-                                print(f"[{account_id}] Nota leyendo msgs de '{chat_name}': {read_err}")
+                                print(f"[{account_id}] ⚠️ Error extracción JS de '{chat_name}': {read_err}")
                                 client_messages = []
 
-                            # GARANTÍA: Al ser un chat abierto desde un badge no leído, DEBE haber al menos 1 mensaje.
-                            # Si la extracción JS del panel #main no encontró elementos, usar la vista previa del panel lateral (row_snippet).
+                            # ── Fallback 1: Vista previa del panel lateral (ya capturada antes del clic) ──
                             if not client_messages:
-                                if row_snippet:
-                                    client_messages = [row_snippet]
-                                    print(f"[{account_id}] ℹ️ Usando vista previa de la fila lateral para '{chat_name}': '{row_snippet}'")
-                                else:
-                                    client_messages = [f"Mensaje recibido de {chat_name}"]
+                                if row_snippet and len(row_snippet.strip()) > 1:
+                                    client_messages = [row_snippet.strip()]
+                                    print(f"[{account_id}] ℹ️ Fallback row_snippet para '{chat_name}': '{row_snippet}'")
+
+                            # ── Fallback 2: Playwright locator sobre el panel #main visible ──────────────
+                            if not client_messages:
+                                try:
+                                    fallback_locs = page.locator(
+                                        '#main [copyable-text], #main span.selectable-text'
+                                    ).all()
+                                    for loc in fallback_locs:
+                                        try:
+                                            t = (loc.inner_text(timeout=300) or '').strip()
+                                            if t and len(t) > 1:
+                                                client_messages.append(t)
+                                        except Exception:
+                                            pass
+                                    if client_messages:
+                                        print(f"[{account_id}] ℹ️ Fallback Playwright locator: {len(client_messages)} textos")
+                                except Exception:
+                                    pass
+
+                            # ── Fallback final: nombre del chat como último recurso ────────────────────
+                            if not client_messages:
+                                client_messages = [f"Mensaje recibido de {chat_name}"]
+                                print(f"[{account_id}] ⚠️ No se extrajeron mensajes para '{chat_name}', usando fallback genérico")
 
                             print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}': {client_messages}")
 
