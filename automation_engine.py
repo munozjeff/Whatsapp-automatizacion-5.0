@@ -488,6 +488,21 @@ class AutomationEngine:
                 print(f"[AutomationEngine] ⚠️ '{acc_id}' no conectó a tiempo. Liberando slot.")
                 return
 
+            # ── 2.5. Escaneo de mensajes no leídos AL INICIO del procesamiento ──────
+            try:
+                all_st = db.get_all_account_states()
+                peer_phones = {info["phone"] for info in all_st.values() if info.get("phone")}
+                print(f"[AutomationEngine] 🔍 [Envío Real] Escaneo AL INICIO del procesamiento para '{acc_id}'...")
+                res_init = runner.check_and_process_unread_chats(
+                    acc_id, peer_phones,
+                    auto_reply_enabled=auto_reply_enabled,
+                    auto_reply_message=auto_reply_message
+                )
+                if res_init.get("notified_clients", 0) > 0:
+                    print(f"[AutomationEngine] 🔔 AL INICIO [Envío Real]: {res_init['notified_clients']} cliente(s) notificados en '{acc_id}'")
+            except Exception as scan_err:
+                print(f"[AutomationEngine] Nota escaneo pre-ráfaga '{acc_id}': {scan_err}")
+
             # ── 3. Ejecutar ráfaga (msgs_interval mensajes) ────────────────────────
             sent_in_burst = 0
             burst_blocked = False
@@ -552,7 +567,7 @@ class AutomationEngine:
                             burst_blocked = True
                             break
 
-            # ── 4. Post-ráfaga: log + escaneo de chats ───────────────────────────
+            # ── 4. Post-ráfaga: log + escaneo de chats AL FINAL del procesamiento ──
             if not burst_blocked:
                 with sent_lock:
                     c_sent  = sent_count_holder[0]
@@ -567,17 +582,18 @@ class AutomationEngine:
                       f"{sent_in_burst}/{msgs_interval} enviados "
                       f"(sesión acumulada: {ses_cnt}/{msgs_session}).")
 
-                # Escanear chats no leídos
+                # Escanear chats no leídos AL FINAL
                 try:
                     all_st = db.get_all_account_states()
                     peer_phones = {info["phone"] for info in all_st.values() if info.get("phone")}
+                    print(f"[AutomationEngine] 🔍 [Envío Real] Escaneo AL FINAL del procesamiento para '{acc_id}'...")
                     res = runner.check_and_process_unread_chats(
                         acc_id, peer_phones,
                         auto_reply_enabled=auto_reply_enabled,
                         auto_reply_message=auto_reply_message
                     )
                     if res.get("notified_clients", 0) > 0:
-                        print(f"[AutomationEngine] 🔔 {res['notified_clients']} cliente(s) notificados en '{acc_id}'")
+                        print(f"[AutomationEngine] 🔔 AL FINAL [Envío Real]: {res['notified_clients']} cliente(s) notificados en '{acc_id}'")
                 except Exception as scan_err:
                     print(f"[AutomationEngine] Nota escaneo post-ráfaga '{acc_id}': {scan_err}")
 
@@ -667,17 +683,18 @@ class AutomationEngine:
         peer_phones_set = set(peer_phones)
         db.update_account_state(acc_id, "haciendo_historial", notes=f"Revisando y haciendo historial (Job #{job_id})")
 
-        # 1. Monitorear chats no leídos
+        # 1. Monitorear chats no leídos AL INICIO del procesamiento de historial
         try:
+            print(f"[AutomationEngine] 🔍 [Historial] Escaneo AL INICIO del procesamiento para '{acc_id}'...")
             res = runner.check_and_process_unread_chats(
                 acc_id, peer_phones_set,
                 auto_reply_enabled=auto_reply_enabled,
                 auto_reply_message=auto_reply_message
             )
-            if res["notified_clients"] > 0:
-                print(f"[AutomationEngine] 🔔 {res['notified_clients']} cliente(s) notificados en '{acc_id}'")
+            if res.get("notified_clients", 0) > 0:
+                print(f"[AutomationEngine] 🔔 AL INICIO [Historial]: {res['notified_clients']} cliente(s) notificados en '{acc_id}'")
         except Exception as scan_err:
-            print(f"[AutomationEngine] Nota en escaneo historial '{acc_id}': {scan_err}")
+            print(f"[AutomationEngine] Nota en escaneo historial inicio '{acc_id}': {scan_err}")
 
         # 2. Enviar mensajes de calentamiento a cuentas amigas (buscando por NOMBRE y APELLIDO)
         #    SOLO se seleccionan como destino las cuentas con status_state == 'disponible'.
@@ -750,6 +767,19 @@ class AutomationEngine:
 
                 if not human_delay(10, 20, stop_checker=lambda: self.job_stop_flags.get(job_id, False)):
                     break
+
+        # 3. Escanear chats no leídos AL FINAL del procesamiento de historial
+        try:
+            print(f"[AutomationEngine] 🔍 [Historial] Escaneo AL FINAL del procesamiento para '{acc_id}'...")
+            res_fin = runner.check_and_process_unread_chats(
+                acc_id, peer_phones_set,
+                auto_reply_enabled=auto_reply_enabled,
+                auto_reply_message=auto_reply_message
+            )
+            if res_fin.get("notified_clients", 0) > 0:
+                print(f"[AutomationEngine] 🔔 AL FINAL [Historial]: {res_fin['notified_clients']} cliente(s) notificados en '{acc_id}'")
+        except Exception as scan_err:
+            print(f"[AutomationEngine] Nota en escaneo historial final '{acc_id}': {scan_err}")
 
         db.update_account_state(acc_id, "disponible", notes="Disponible (Historial completado)")
         return True
