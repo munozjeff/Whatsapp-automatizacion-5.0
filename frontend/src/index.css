@@ -2238,6 +2238,15 @@ code {
 
 .client-notif-msg-text {
   flex: 1;
+  line-height: 1.45;
+}
+
+.client-notif-msg-ts {
+  font-size: 0.68rem;
+  color: rgba(148, 163, 184, 0.65);
+  margin-left: 6px;
+  white-space: nowrap;
+  font-style: italic;
 }
 
 .client-notif-footer {

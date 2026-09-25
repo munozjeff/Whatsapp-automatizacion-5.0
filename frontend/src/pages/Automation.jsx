@@ -160,12 +160,30 @@ export default function Automation({ activeTab }) {
     }
   };
 
+  // Parsea el message_text de la BD en un array de objetos { ts, text }
+  // El formato guardado es: "[HH:MM, DD/MM/YYYY] texto\n[HH:MM] texto2\ntexto3"
   const parseNotificationMessages = (text) => {
     if (!text) return [];
-    return text
-      .split('\n')
-      .map((l) => l.replace(/^\[\d{1,2}:\d{2}.*?\]\s*/, '').trim())
-      .filter((l) => l.length > 0);
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    return lines.map(line => {
+      // Intentar extraer timestamp al inicio: [cualquier cosa entre corchetes]
+      const tsMatch = line.match(/^\[([^\]]+)\]\s*/);
+      if (tsMatch) {
+        const ts = tsMatch[1].trim();
+        const msg = line.slice(tsMatch[0].length).trim();
+        return { ts, text: msg || line };
+      }
+      return { ts: '', text: line };
+    }).filter(m => m.text.length > 0);
+  };
+
+  // Devuelve la preview compacta del último mensaje (truncado)
+  const getNotifPreview = (parsedMsgs, rawText) => {
+    if (parsedMsgs.length === 0) return (rawText || '').slice(0, 80);
+    // Mostrar solo el último mensaje recibido (el más reciente)
+    const last = parsedMsgs[parsedMsgs.length - 1];
+    const preview = last.text || '';
+    return preview.length > 70 ? preview.slice(0, 70) + '…' : preview;
   };
 
   useEffect(() => {
@@ -654,7 +672,7 @@ export default function Automation({ activeTab }) {
                             </div>
 
                             <div className="client-notif-preview-msg">
-                              {parsedMsgs.join(' • ') || n.message_text}
+                              {getNotifPreview(parsedMsgs, n.message_text)}
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -685,7 +703,12 @@ export default function Automation({ activeTab }) {
                                   parsedMsgs.map((msg, idx) => (
                                     <div key={idx} className="client-notif-sub-bubble">
                                       <span className="client-notif-msg-icon">💬</span>
-                                      <span className="client-notif-msg-text">{msg}</span>
+                                      <span className="client-notif-msg-text">
+                                        {msg.text}
+                                        {msg.ts && (
+                                          <span className="client-notif-msg-ts"> · {msg.ts}</span>
+                                        )}
+                                      </span>
                                     </div>
                                   ))
                                 ) : (
