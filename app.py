@@ -627,8 +627,19 @@ def update_job_status(job_id):
 
     return jsonify({"status": "success", "message": f"Job #{job_id} actualizado a '{new_status}'."})
 
+@app.route("/api/automation/jobs/<int:job_id>/terminate", methods=["POST"])
+def terminate_automation_job(job_id):
+    """Detiene INMEDIATAMENTE un job: mata todos los hilos, cierra navegadores
+    y libera todos los recursos en tiempo real."""
+    ok, msg = automation_engine.terminate_job(job_id)
+    return jsonify({"status": "success" if ok else "error", "message": msg})
+
 @app.route("/api/automation/jobs/<int:job_id>", methods=["DELETE"])
 def delete_automation_job(job_id):
+    # Si el job está activo, terminarlo primero para liberar recursos
+    job = db.get_automation_job(job_id)
+    if job and job.get("status") in ("running", "pausing"):
+        automation_engine.terminate_job(job_id)
     deleted = db.delete_automation_job(job_id)
     if deleted:
         return jsonify({"status": "success", "message": f"Job #{job_id} eliminado."})

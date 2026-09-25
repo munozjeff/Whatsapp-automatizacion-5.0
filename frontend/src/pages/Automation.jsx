@@ -4,9 +4,10 @@ import { useToast } from '../hooks/useToast';
 /* ── Status helpers ─────────────────────────── */
 const STATUS_META = {
   running:   { label: 'En ejecución', cls: 'badge-active',     icon: '🚀' },
+  stopping:  { label: 'Deteniendo...', cls: 'badge-restricted',  icon: '⏳' },
   pausing:   { label: 'Pausando...',  cls: 'badge-restricted',  icon: '⏳' },
   pending:   { label: 'Pendiente',    cls: 'badge-restricted',  icon: '⏳' },
-  paused:    { label: 'Pausado',      cls: 'badge-restricted',  icon: '⏸️' },
+  paused:    { label: 'Detenido',     cls: 'badge-restricted',  icon: '⏸️' },
   completed: { label: 'Completado',   cls: 'badge-available',   icon: '✅' },
   error:     { label: 'Error',        cls: 'badge-blocked',     icon: '❌' },
 };
@@ -311,6 +312,28 @@ export default function Automation({ activeTab }) {
       fetchAll();
     } catch (err) {
       addToast('Error actualizando el job.', 'error');
+      fetchAll();
+    }
+  };
+
+  const terminateJob = async (jobId) => {
+    // Actualización optimista inmediata
+    setJobs((prevJobs) =>
+      prevJobs.map((j) =>
+        j.id === jobId ? { ...j, status: 'stopping' } : j
+      )
+    );
+    try {
+      const res = await fetch(`/api/automation/jobs/${jobId}/terminate`, { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        addToast(`🛑 Job #${jobId} detenido y recursos liberados.`, 'success');
+      } else {
+        addToast(data.message || 'Error al detener el job.', 'error');
+      }
+      fetchAll();
+    } catch (err) {
+      addToast('Error al detener el job.', 'error');
       fetchAll();
     }
   };
@@ -742,10 +765,15 @@ export default function Automation({ activeTab }) {
                           <div className="job-actions">
                             {job.status === 'running' && (
                               <button
-                                className="btn btn-sm btn-warning"
-                                onClick={() => updateJobStatus(job.id, 'paused')}
+                                className="btn btn-sm btn-danger"
+                                onClick={() => terminateJob(job.id)}
                               >
-                                ⏸ Pausar
+                                ⏹ Detener
+                              </button>
+                            )}
+                            {(job.status === 'stopping' || job.status === 'pausing') && (
+                              <button className="btn btn-sm btn-danger" disabled>
+                                <span className="spinner spinner-sm"></span> Deteniendo...
                               </button>
                             )}
                             {job.status === 'paused' && (
@@ -756,14 +784,12 @@ export default function Automation({ activeTab }) {
                                 ▶ Reanudar
                               </button>
                             )}
-                            {(job.status === 'completed' || job.status === 'paused' || job.status === 'error') && (
-                              <button
-                                className="btn btn-sm btn-danger"
-                                onClick={() => confirmDeleteJob(job.id)}
-                              >
-                                🗑
-                              </button>
-                            )}
+                            <button
+                              className="btn btn-sm btn-danger"
+                              onClick={() => confirmDeleteJob(job.id)}
+                            >
+                              🗑
+                            </button>
                           </div>
                         </div>
                       );
@@ -978,6 +1004,76 @@ export default function Automation({ activeTab }) {
             </button>
           </div>
 
+          {/* Banner de mensajes reales enviados */}
+          {(() => {
+            const runningJobs = jobs.filter(j => j.status === 'running' || j.status === 'paused' || j.status === 'completed');
+            const totalSent = runningJobs.reduce((acc, j) => acc + (j.sent_count || 0), 0);
+            const totalErrors = runningJobs.reduce((acc, j) => acc + (j.error_count || 0), 0);
+            const totalContacts = runningJobs.reduce((acc, j) => acc + (j.total_contacts || 0), 0);
+            const activeRunning = jobs.filter(j => j.status === 'running').length;
+            if (runningJobs.length === 0) return null;
+            return (
+              <div style={{
+                display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap'
+              }}>
+                <div style={{
+                  flex: '1', minWidth: '150px',
+                  background: 'linear-gradient(135deg, rgba(74,222,128,0.15), rgba(34,197,94,0.08))',
+                  border: '1px solid rgba(74,222,128,0.35)',
+                  borderRadius: '12px', padding: '16px 20px',
+                  display: 'flex', alignItems: 'center', gap: '14px'
+                }}>
+                  <span style={{ fontSize: '2rem' }}>✅</span>
+                  <div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: '800', color: '#4ade80', lineHeight: 1 }}>{totalSent}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#86efac', marginTop: '2px' }}>Mensajes reales enviados</div>
+                  </div>
+                </div>
+                <div style={{
+                  flex: '1', minWidth: '150px',
+                  background: 'linear-gradient(135deg, rgba(251,146,60,0.15), rgba(249,115,22,0.08))',
+                  border: '1px solid rgba(251,146,60,0.35)',
+                  borderRadius: '12px', padding: '16px 20px',
+                  display: 'flex', alignItems: 'center', gap: '14px'
+                }}>
+                  <span style={{ fontSize: '2rem' }}>👥</span>
+                  <div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: '800', color: '#fb923c', lineHeight: 1 }}>{totalContacts}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#fdba74', marginTop: '2px' }}>Total contactos</div>
+                  </div>
+                </div>
+                <div style={{
+                  flex: '1', minWidth: '150px',
+                  background: 'linear-gradient(135deg, rgba(248,113,113,0.15), rgba(239,68,68,0.08))',
+                  border: '1px solid rgba(248,113,113,0.35)',
+                  borderRadius: '12px', padding: '16px 20px',
+                  display: 'flex', alignItems: 'center', gap: '14px'
+                }}>
+                  <span style={{ fontSize: '2rem' }}>❌</span>
+                  <div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: '800', color: '#f87171', lineHeight: 1 }}>{totalErrors}</div>
+                    <div style={{ fontSize: '0.8rem', color: '#fca5a5', marginTop: '2px' }}>Errores acumulados</div>
+                  </div>
+                </div>
+                {activeRunning > 0 && (
+                  <div style={{
+                    flex: '1', minWidth: '150px',
+                    background: 'linear-gradient(135deg, rgba(96,165,250,0.15), rgba(59,130,246,0.08))',
+                    border: '1px solid rgba(96,165,250,0.35)',
+                    borderRadius: '12px', padding: '16px 20px',
+                    display: 'flex', alignItems: 'center', gap: '14px'
+                  }}>
+                    <span style={{ fontSize: '2rem' }}>🚀</span>
+                    <div>
+                      <div style={{ fontSize: '1.8rem', fontWeight: '800', color: '#60a5fa', lineHeight: 1 }}>{activeRunning}</div>
+                      <div style={{ fontSize: '0.8rem', color: '#93c5fd', marginTop: '2px' }}>Jobs en ejecución</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div className="card">
             <div className="card-header">
               <h3>📊 Jobs Activos e Historial</h3>
@@ -1038,7 +1134,11 @@ export default function Automation({ activeTab }) {
                                 <span className="inline-pct">{pct}%</span>
                               </div>
                               <div className="table-sub">
-                                {job.sent_count}/{job.total_contacts} · {job.error_count} errores
+                                <span style={{ color: '#4ade80', fontWeight: '600' }}>✅ {job.sent_count} reales</span>
+                                &nbsp;&middot;&nbsp;
+                                {job.total_contacts} total
+                                &nbsp;&middot;&nbsp;
+                                <span style={{ color: '#f87171' }}>❌ {job.error_count} err</span>
                               </div>
                             </td>
                             <td>
@@ -1047,15 +1147,15 @@ export default function Automation({ activeTab }) {
                             <td>
                               <div className="job-tbl-actions">
                                 {job.status === 'running' && (
-                                  <button className="btn btn-sm btn-warning"
-                                    title="Pausar automatización"
-                                    onClick={() => updateJobStatus(job.id, 'paused')}>
-                                    ⏸ Pausar
+                                  <button className="btn btn-sm btn-danger"
+                                    title="Detener automatización inmediatamente"
+                                    onClick={() => terminateJob(job.id)}>
+                                    ⏹ Detener
                                   </button>
                                 )}
-                                {job.status === 'pausing' && (
-                                  <button className="btn btn-sm btn-warning" disabled title="Deteniendo hilos...">
-                                    <span className="spinner spinner-sm"></span> Pausando...
+                                {(job.status === 'stopping' || job.status === 'pausing') && (
+                                  <button className="btn btn-sm btn-danger" disabled title="Deteniendo hilos...">
+                                    <span className="spinner spinner-sm"></span> Deteniendo...
                                   </button>
                                 )}
                                 {job.status === 'paused' && (
@@ -1066,6 +1166,7 @@ export default function Automation({ activeTab }) {
                                   </button>
                                 )}
                                 <button className="btn btn-sm btn-danger"
+                                  title="Eliminar registro del job"
                                   onClick={() => confirmDeleteJob(job.id)}>
                                   🗑
                                 </button>

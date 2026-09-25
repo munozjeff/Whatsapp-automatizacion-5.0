@@ -9,8 +9,10 @@ from anti_detection import human_delay, interruptible_sleep
 class AutomationEngine:
     def __init__(self):
         self._lock = threading.Lock()
-        self.active_jobs: dict[int, threading.Thread] = {}  # job_id -> Thread
-        self.job_stop_flags: dict[int, bool] = {}  # job_id -> bool
+        self.active_jobs: dict[int, threading.Thread] = {}   # job_id -> main Thread
+        self.history_jobs: dict[int, threading.Thread] = {}  # job_id -> history Thread
+        self.job_stop_flags: dict[int, bool] = {}            # job_id -> bool
+        self.job_account_ids: dict[int, list] = {}           # job_id -> [account_ids]
 
     def start_job(self, job_id: int):
         """Inicia el hilo de ejecución principal para un job de automatización."""
@@ -36,10 +38,50 @@ class AutomationEngine:
         return True, f"Trabajo #{job_id} iniciado en segundo plano."
 
     def stop_job(self, job_id: int):
-        """Solicita la detención o pausa de un job."""
+        """Solicita la detención cooperativa de un job (señal suave)."""
         with self._lock:
             self.job_stop_flags[job_id] = True
         return True, f"Solicitud de detención enviada a job #{job_id}."
+
+    def terminate_job(self, job_id: int):
+        """Termina INMEDIATAMENTE un job: pone el flag de parada, cierra todos los
+        navegadores del job y marca el estado final en BD. No espera a que los
+        hilos terminen su ciclo natural — el cierre del navegador los desbloquea.
+        """
+        import time as _t
+        # 1. Activar flag de parada para que los loops internos salgan
+        with self._lock:
+            self.job_stop_flags[job_id] = True
+            acc_ids = list(self.job_account_ids.get(job_id, []))
+
+        # 2. Cerrar TODOS los navegadores asociados al job de forma forzada
+        print(f"[AutomationEngine] 🛑 TERMINATE Job #{job_id}: cerrando {len(acc_ids)} navegador(es)...")
+        for acc_id in acc_ids:
+            try:
+                runner.close_instance(acc_id)
+            except Exception as e:
+                print(f"[AutomationEngine] Nota al cerrar '{acc_id}' en terminate: {e}")
+
+        # 3. Actualizar BD: marcar cuentas como disponibles
+        try:
+            for acc_id in acc_ids:
+                db_st = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+                if db_st not in ("bloqueado", "restringido"):
+                    db.update_account_state(acc_id, "disponible", notes="Detenido por usuario")
+        except Exception as e:
+            print(f"[AutomationEngine] Error actualizando cuentas al terminar job #{job_id}: {e}")
+
+        # 4. Marcar job como detenido en BD
+        try:
+            db.update_automation_job_status(
+                job_id, "paused",
+                notes="Detenido forzosamente por el usuario."
+            )
+        except Exception as e:
+            print(f"[AutomationEngine] Error actualizando estado del job #{job_id}: {e}")
+
+        print(f"[AutomationEngine] 🛑 Job #{job_id} terminado forzosamente.")
+        return True, f"Job #{job_id} detenido y recursos liberados."
 
     def _format_message(self, template: str, contact: dict, variables: list) -> str:
         """Formatea la plantilla reemplazando variables dinámicas."""
@@ -83,6 +125,10 @@ class AutomationEngine:
             db.update_automation_job_status(job_id, "error", notes="Sin cuentas válidas.")
             return
 
+        # Registrar cuentas del job para terminate_job()
+        with self._lock:
+            self.job_account_ids[job_id] = list(account_ids)
+
         # Cargar perfil
         profiles = db.get_send_profiles()
         profile = next((p for p in profiles if p["id"] == profile_id), None)
@@ -123,6 +169,8 @@ class AutomationEngine:
                 args=(job_id, account_ids, profile),
                 daemon=True
             )
+            with self._lock:
+                self.history_jobs[job_id] = history_thread
             history_thread.start()
         else:
             print(f"[AutomationEngine] ℹ️ Tanda de Historial DESACTIVADA para Job #{job_id} (0 cuentas configuradas).")
