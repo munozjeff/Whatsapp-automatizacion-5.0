@@ -27,10 +27,14 @@ class SessionManager:
 
     @staticmethod
     def kill_profile_processes(account_id: str):
-        """Fuerza la terminacion de procesos chrome.exe asociados a este perfil en Windows."""
+        """Fuerza la terminacion de procesos chrome.exe asociados exclusivamente a este perfil en Windows."""
         try:
-            safe_id = "".join(c for c in account_id if c.isalnum() or c in ("_", "-")).strip()
-            ps_cmd = f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | Where-Object {{ $_.CommandLine -like '*{safe_id}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+            p_dir = SessionManager.get_profile_dir(account_id)
+            folder_name = p_dir.name
+            if not folder_name:
+                return
+            # Filtrar por la carpeta exacta del perfil (ej: "profiles\account_id\" o "profiles/account_id/")
+            ps_cmd = f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | Where-Object {{ $_.CommandLine -like '*profiles\\{folder_name}\\*' -or $_.CommandLine -like '*profiles/{folder_name}/*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
             subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, timeout=5)
         except Exception as e:
             print(f"Error forzando cierre de procesos para {account_id}: {e}")

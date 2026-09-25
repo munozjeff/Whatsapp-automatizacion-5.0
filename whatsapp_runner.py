@@ -532,15 +532,18 @@ class WhatsAppRunner:
     def extract_whatsapp_phone_number(self, account_id: str) -> str | None:
         """
         Extrae el número de teléfono propio vinculado a la sesión de WhatsApp Web.
-        1. Intenta extracción instantánea por LocalStorage / window.Store.
-        2. Si falla, realiza inspección DOM rápida vía JavaScript procesando marcas Unicode LTR y espacios NBSP.
-        Guarda automáticamente el resultado en BD (account_states.phone).
+        Guarda automáticamente el resultado en BD (account_states.phone) sin sobreescribir el estado activo.
         """
         with self._lock:
             instance = self.active_instances.get(account_id)
 
         if not instance or instance.get("status") != "CONECTADA":
             return None
+
+        # Si el número ya se encuentra registrado en BD, reutilizar directamente
+        existing_phone = db.get_all_account_states().get(account_id, {}).get("phone")
+        if existing_phone and len(existing_phone) >= 8:
+            return existing_phone
 
         page: Page = instance["page"]
         phone_number = None
@@ -681,7 +684,9 @@ class WhatsAppRunner:
                     pass
 
             if phone_number:
-                db.update_account_state(account_id, "disponible", phone=phone_number)
+                current_st = db.get_all_account_states().get(account_id, {}).get("status_state", "disponible")
+                new_st = current_st if current_st in ("enviando", "haciendo_historial", "bloqueado", "restringido") else "disponible"
+                db.update_account_state(account_id, new_st, phone=phone_number)
                 print(f"[{account_id}] [OK] Numero de telefono extraido final y guardado en BD: {phone_number}")
             else:
                 print(f"[{account_id}] [WARN] No se pudo extraer el numero de telefono.")
