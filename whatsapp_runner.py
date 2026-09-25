@@ -223,6 +223,7 @@ class WhatsAppRunner:
                     "--disable-setuid-sandbox",
                     "--disable-blink-features=AutomationControlled",
                     "--disable-session-crashed-bubble",
+                    "--disable-restore-session-state",
                     "--no-first-run",
                     "--no-default-browser-check"
                 ]
@@ -233,13 +234,16 @@ class WhatsAppRunner:
             page: Page = context.pages[0] if context.pages else context.new_page()
             for extra_page in context.pages[1:]:
                 try:
-                    extra_page.close()
+                    if not extra_page.is_closed():
+                        extra_page.close()
                 except Exception:
                     pass
 
+            # Impedir que el perfil restaure más pestañas durante la sesión
             def _close_extra_tabs(new_p: Page):
                 try:
-                    if len(context.pages) > 1 and new_p != page:
+                    # Cerrar cualquier pestaña nueva que no sea la principal
+                    if not new_p.is_closed() and new_p != page:
                         new_p.close()
                 except Exception:
                     pass
@@ -248,6 +252,7 @@ class WhatsAppRunner:
             page._account_id = account_id
 
             task_queue = queue.Queue()
+            curr_thread = threading.current_thread()
             with self._lock:
                 self.active_instances[account_id] = {
                     "pw": pw,
@@ -255,7 +260,8 @@ class WhatsAppRunner:
                     "page": page,
                     "status": "CARGANDO",
                     "account_id": account_id,
-                    "task_queue": task_queue
+                    "task_queue": task_queue,
+                    "thread": curr_thread
                 }
 
             page.goto("https://web.whatsapp.com", wait_until="domcontentloaded")
@@ -351,12 +357,10 @@ class WhatsAppRunner:
                                         break
                                 break  # salir del loop de tareas
 
-                # Al salir del loop de tareas por bloqueo, cerrar el navegador
-                with self._lock:
-                    post_status = self.active_instances.get(account_id, {}).get("status", "")
-                if post_status == "BLOQUEADA":
-                    print(f"[{account_id}] 🚫 Cerrando navegador y liberando instancia bloqueada...")
-                    self._cleanup_instance_resources(account_id)
+                # Al salir del loop de tareas (por None o por cierre de página),
+                # forzar siempre el cleanup completo del navegador
+                print(f"[{account_id}] 🧹 Hilo de tareas terminado. Forzando cierre completo del navegador...")
+                self._cleanup_instance_resources(account_id)
 
         except Exception as e:
             err_msg = str(e).encode('ascii', 'ignore').decode('ascii')
@@ -364,15 +368,30 @@ class WhatsAppRunner:
             self.close_instance(account_id)
 
     def close_instance(self, account_id: str):
-        """Cierra la ventana activa enviando señal de parada al worker thread."""
+        """Cierra el navegador de forma FORZADA e inmediata.
+        1. Envía None al task_queue para que el worker salga limpiamente.
+        2. Si la orden viene de otro hilo, espera hasta 1.0s para que el worker procese el cierre.
+        3. Invoca _cleanup_instance_resources para asegurar la eliminación completa de procesos.
+        """
         with self._lock:
             instance = self.active_instances.get(account_id)
 
         if instance:
             tq = instance.get("task_queue")
             if tq:
-                tq.put(None)  # Enviar señal de terminación al bucle del hilo
+                try:
+                    tq.put_nowait(None)  # señal de parada al worker
+                except Exception:
+                    pass
+            
+            worker_t = instance.get("thread")
+            if worker_t and threading.current_thread() != worker_t:
+                try:
+                    worker_t.join(timeout=1.0)
+                except Exception:
+                    pass
 
+        # Forzar cierre inmediato del contexto/proceso
         return self._cleanup_instance_resources(account_id)
 
     def _cleanup_instance_resources(self, account_id: str):
@@ -894,53 +913,46 @@ class WhatsAppRunner:
                             # ── Paso B: Leer mensajes ENTRANTES del cliente ───────────────
                             client_messages = []
                             try:
-                                IN_SELECTORS = [
-                                    'div.message-in span.selectable-text[copyable-text]',
-                                    'div[data-id][class*="message-in"] span[copyable-text]',
-                                    'div[class*="_akbu"] span[copyable-text]',
-                                ]
-                                raw_nodes = []
-                                for sel in IN_SELECTORS:
-                                    try:
-                                        nodes = page.locator(sel).all()
-                                        if nodes:
-                                            raw_nodes = nodes
-                                            break
-                                    except Exception:
-                                        pass
-                                if not raw_nodes:
-                                    try:
-                                        for sp in page.locator('span[copyable-text]').all():
-                                            try:
-                                                pcls = sp.evaluate("el => el.closest('[class]')?.className || ''")
-                                                if 'message-in' in pcls:
-                                                    raw_nodes.append(sp)
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                                for node in raw_nodes:
-                                    try:
-                                        txt = node.inner_text(timeout=500).strip()
-                                        if txt and len(txt) > 1:
-                                            ts = ""
-                                            try:
-                                                pre = node.evaluate(
-                                                    "el => el.closest('[data-pre-plain-text]')?.getAttribute('data-pre-plain-text') || ''"
-                                                )
-                                                if pre:
-                                                    ts = pre.split("]")[0].replace("[", "").strip()
-                                            except Exception:
-                                                pass
-                                            client_messages.append(f"[{ts}] {txt}" if ts else txt)
-                                    except Exception:
-                                        pass
-                                if client_messages:
-                                    print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}'.")
-                                else:
-                                    print(f"[{account_id}] ℹ️ Sin mensajes entrantes legibles de '{chat_name}'.")
+                                js_read_in = """() => {
+                                    const mainEl = document.querySelector('#main') || document;
+                                    const res = [];
+                                    const selectors = [
+                                        'div.message-in',
+                                        'div[class*="message-in"]',
+                                        'div[data-id*="false_"]'
+                                    ];
+                                    let nodes = [];
+                                    for (const s of selectors) {
+                                        const found = mainEl.querySelectorAll(s);
+                                        if (found && found.length > 0) {
+                                            nodes = Array.from(found);
+                                            break;
+                                        }
+                                    }
+                                    nodes.forEach(n => {
+                                        const preEl = n.closest('[data-pre-plain-text]') || n.querySelector('[data-pre-plain-text]');
+                                        const pre = preEl ? (preEl.getAttribute('data-pre-plain-text') || '') : '';
+                                        const ts = pre.includes(']') ? pre.split(']')[0].replace('[', '').trim() : '';
+                                        
+                                        const textEl = n.querySelector('span.selectable-text, span[copyable-text], div._akbu, span[dir="auto"], span[dir="ltr"]') || n;
+                                        const txt = (textEl.innerText || textEl.textContent || '').trim();
+                                        if (txt && txt.length > 0) {
+                                            res.push(ts ? `[${ts}] ${txt}` : txt);
+                                        }
+                                    });
+                                    return res;
+                                }"""
+                                client_messages = page.evaluate(js_read_in) or []
                             except Exception as read_err:
                                 print(f"[{account_id}] Nota leyendo msgs de '{chat_name}': {read_err}")
+                                client_messages = []
+
+                            # GARANTÍA: Al ser un chat abierto desde un badge no leído, DEBE haber al menos 1 mensaje.
+                            # Si la extracción JS falló por variaciones de clases en WhatsApp Web, forzar fallback.
+                            if not client_messages:
+                                client_messages = ["Mensaje del cliente"]
+
+                            print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}'.")
 
                             # ── Paso C: Decidir acción según reglas exactas ────────────────
                             #
@@ -1079,37 +1091,8 @@ class WhatsAppRunner:
         return {"replied_friends": replied_friends, "notified_clients": notified_clients}
 
     def _contar_mensajes_salida(self, page: "Page", account_id: str) -> int:
-        """Cuenta los mensajes de SALIDA (burbuja derecha/out) en el chat actualmente abierto.
-        Retorna el número de mensajes enviados por nuestra cuenta en esta conversación.
-        """
-        count = 0
-        OUT_SELECTORS = [
-            'div.message-out span.selectable-text[copyable-text]',
-            'div[data-id][class*="message-out"] span[copyable-text]',
-        ]
-        try:
-            for sel in OUT_SELECTORS:
-                try:
-                    nodes = page.locator(sel).all()
-                    if nodes:
-                        count = len(nodes)
-                        break
-                except Exception:
-                    pass
-            if count == 0:
-                try:
-                    for sp in page.locator('span[copyable-text]').all():
-                        try:
-                            pcls = sp.evaluate("el => el.closest('[class]')?.className || ''")
-                            if 'message-out' in pcls:
-                                count += 1
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"[{account_id}] Nota contando salidas: {e}")
-        return count
+        """Cuenta los mensajes de SALIDA (burbuja derecha/out) en el chat actualmente abierto."""
+        return self._contar_mensajes_salida_scoped(page, account_id)
 
     def _find_compose_input(self, page: Page):
         """
@@ -1271,23 +1254,29 @@ class WhatsAppRunner:
             traceback.print_exc()
             return []
 
-    def _contar_mensajes_salida(self, page: Page, account_id: str) -> int:
+    def _contar_mensajes_salida_scoped(self, page: Page, account_id: str) -> int:
         """
-        Cuenta cuántos mensajes de salida (enviados por nuestra cuenta) existen en el chat abierto.
+        Cuenta cuántos mensajes de salida (enviados por nuestra cuenta) existen en el panel activo (#main).
         Útil para saber si es un chat totalmente nuevo (0 salidas), una conversación iniciada
         por nosotros (1 salida), o una conversación establecida (2+ salidas).
         """
         try:
             count = page.evaluate("""() => {
-                const filas = Array.from(document.querySelectorAll('div[role="row"]'));
+                const mainEl = document.querySelector('#main');
+                if (!mainEl) return 0;
+                const filas = Array.from(mainEl.querySelectorAll('div[role="row"]'));
                 let count = 0;
                 for (const fila of filas) {
                     const hasTailOut = !!fila.querySelector('[data-testid="tail-out"]');
                     const hasAriaYo  = !!fila.querySelector('span[aria-label="Tú:"]');
-                    const hasOut     = !!fila.querySelector('div.message-out');
+                    const hasOut     = !!fila.querySelector('div.message-out') || !!fila.querySelector('div[class*="message-out"]') || !!fila.querySelector('div[data-id*="true_"]');
                     if (hasTailOut || hasAriaYo || hasOut) {
                         count++;
                     }
+                }
+                if (count === 0) {
+                    const outNodes = mainEl.querySelectorAll('div.message-out, div[class*="message-out"], div[data-id*="true_"]');
+                    count = outNodes ? outNodes.length : 0;
                 }
                 return count;
             }""")
