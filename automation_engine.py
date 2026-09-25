@@ -42,40 +42,47 @@ class AutomationEngine:
         return self.terminate_job(job_id)
 
     def terminate_job(self, job_id: int):
-        """Termina INMEDIATAMENTE un job: pone el flag de parada, cierra todos los
-        navegadores del job y marca el estado final en BD. Usa SessionManager.kill_profile_processes
-        como medida de emergencia para matar los procesos Chrome si aún siguen corriendo.
+        """Termina INMEDIATAMENTE un job: detiene todos los hilos (envío real e historial),
+        cierra todos los navegadores del job y marca el estado final en BD.
         """
         from session_manager import SessionManager
-        # 1. Activar flag de parada para que los loops internos salgan
+        print(f"[AutomationEngine] 🛑 TERMINATE solicitado para Job #{job_id}...")
+
+        # 1. Activar flag de parada para que todos los hilos salgan
         with self._lock:
             self.job_stop_flags[job_id] = True
-            acc_ids = list(self.job_account_ids.get(job_id, []))
+            acc_ids = set(self.job_account_ids.get(job_id, []))
 
-        # 2. Cerrar TODOS los navegadores asociados al job de forma forzada
-        print(f"[AutomationEngine] \ud83d\uded1 TERMINATE Job #{job_id}: cerrando {len(acc_ids)} navegador(es)...")
+        # Respaldar lista de cuentas desde la BD por si la memoria no la tenía registrada completa
+        try:
+            db_job = db.get_automation_job(job_id)
+            if db_job and db_job.get("account_ids"):
+                acc_ids.update(db_job.get("account_ids", []))
+        except Exception as db_e:
+            print(f"[AutomationEngine] Nota al leer job de BD en terminate: {db_e}")
+
+        # 2. Cerrar TODOS los navegadores asociados al job de forma forzada (envío e historial)
+        print(f"[AutomationEngine] 🛑 Deteniendo {len(acc_ids)} cuenta(s) (envío real e historial)...")
         for acc_id in acc_ids:
             try:
                 runner.close_instance(acc_id)
             except Exception as e:
                 print(f"[AutomationEngine] Nota al cerrar '{acc_id}' en terminate: {e}")
 
-        # 3. Método nuclear: matar procesos Chrome pendientes por perfil
-        #    Esto garantiza que ningún navegador siga corriendo aunque Playwright no lo haya cerrado
+        # 3. Método de emergencia: matar procesos Chrome residuales por perfil
         import time as _t
-        _t.sleep(0.5)  # Dar tiempo a que Playwright intente cerrar primero
+        _t.sleep(0.3)
         for acc_id in acc_ids:
             try:
-                if runner.active_instances.get(acc_id):   # si aún sigue abierto
-                    print(f"[AutomationEngine] \ud83d\udc80 Forzando kill de procesos Chrome para '{acc_id}'...")
                 SessionManager.kill_profile_processes(acc_id)
             except Exception as e:
                 print(f"[AutomationEngine] Nota en kill_profile_processes para '{acc_id}': {e}")
 
         # 4. Actualizar BD: marcar cuentas como disponibles
         try:
+            all_states = db.get_all_account_states()
             for acc_id in acc_ids:
-                db_st = db.get_all_account_states().get(acc_id, {}).get("status_state", "")
+                db_st = all_states.get(acc_id, {}).get("status_state", "")
                 if db_st not in ("bloqueado", "restringido"):
                     db.update_account_state(acc_id, "disponible", notes="Detenido por usuario")
         except Exception as e:
@@ -85,13 +92,13 @@ class AutomationEngine:
         try:
             db.update_automation_job_status(
                 job_id, "paused",
-                notes="Detenido forzosamente por el usuario."
+                notes="Detenido totalmente por el usuario (Envío + Historial)."
             )
         except Exception as e:
             print(f"[AutomationEngine] Error actualizando estado del job #{job_id}: {e}")
 
-        print(f"[AutomationEngine] \ud83d\uded1 Job #{job_id} terminado forzosamente.")
-        return True, f"Job #{job_id} detenido y recursos liberados."
+        print(f"[AutomationEngine] 🛑 Job #{job_id} (Envío Real + Historial) terminado forzosamente.")
+        return True, f"Job #{job_id} (Envío Real + Historial) detenido y recursos liberados."
 
     def _format_message(self, template: str, contact: dict, variables: list) -> str:
         """Formatea la plantilla reemplazando variables dinámicas."""
