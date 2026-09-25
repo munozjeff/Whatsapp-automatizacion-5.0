@@ -167,19 +167,14 @@ class AutomationEngine:
             db.update_automation_job_status(job_id, "error", notes="Sin contactos para Envío Real.")
             return
 
-        # ── Dividir el pool en dos sub-pools exclusivos ──────────────────────────
-        # Las primeras acc_sending_count cuentas van a envío real.
-        # Las siguientes acc_history_count cuentas van a historial.
-        # Si hay menos cuentas que las solicitadas, se usan todas las disponibles para ese rol.
-        sending_pool = account_ids[:acc_sending_count] if acc_sending_count > 0 else []
-        history_pool = account_ids[acc_sending_count:acc_sending_count + acc_history_count] if acc_history_count > 0 else []
+        # ── Asignar pools de cuentas a Envío Real e Historial ────────────────────
+        # Todas las cuentas seleccionadas para el job participan en envío e historial.
+        # acc_sending_count y acc_history_count definen el límite de slots concurrentes por tanda.
+        sending_pool = list(account_ids) if acc_sending_count > 0 else []
+        history_pool = list(account_ids) if acc_history_count > 0 else []
 
-        # Si no hay cuentas suficientes para historial, usar las que queden tras envío
-        if not history_pool and acc_history_count > 0 and len(account_ids) > len(sending_pool):
-            history_pool = account_ids[len(sending_pool):]
-
-        print(f"[AutomationEngine] 📄 Pool Envío Real: {sending_pool}")
-        print(f"[AutomationEngine] 📄 Pool Historial: {history_pool}")
+        print(f"[AutomationEngine] 📄 Pool Envío Real: {len(sending_pool)} cuenta(s) seleccionadas.")
+        print(f"[AutomationEngine] 📄 Pool Historial: {len(history_pool)} cuenta(s) seleccionadas.")
 
         # Registrar TODAS las cuentas del job para terminate_job()
         with self._lock:
@@ -333,16 +328,59 @@ class AutomationEngine:
                                 and a not in active_slots]
 
                 if not eligible and not active_burst_threads:
-                    # Todas bloqueadas o agotadas y ningún slot activo: terminar
-                    reason = "agotadas" if not blocked_accounts else "bloqueadas/agotadas"
-                    print(f"[AutomationEngine] 🚫 Todas las cuentas están {reason} en Job #{job_id}. Finalizando.")
-                    db.update_automation_job_status(
-                        job_id, "error",
-                        sent=sent_count_holder[0],
-                        errors=error_count_holder[0],
-                        notes=f"Cuentas {reason}. Enviados: {sent_count_holder[0]}."
-                    )
-                    return
+                    # Verificar si quedan cuentas válidas (no bloqueadas/restringidas) en el job
+                    valid_remaining = self._check_and_skip_blocked(account_ids, blocked_accounts, skip_sending=False)
+
+                    if not valid_remaining:
+                        # Todas las cuentas del job están realmente bloqueadas o restringidas
+                        print(f"[AutomationEngine] 🚫 Todas las cuentas del Job #{job_id} están bloqueadas/restringidas. Finalizando.")
+                        db.update_automation_job_status(
+                            job_id, "error",
+                            sent=sent_count_holder[0],
+                            errors=error_count_holder[0],
+                            notes=f"Todas las cuentas están bloqueadas o restringidas. Enviados: {sent_count_holder[0]}."
+                        )
+                        return
+                    else:
+                        # Hay cuentas válidas, pero todas alcanzaron su límite de sesión (msgs_session)
+                        rest_mins = profile.get("rest_time_minutes", 30)
+                        print(f"[AutomationEngine] ⏳ {len(valid_remaining)} cuenta(s) alcanzaron el límite de sesión ({msgs_session} msgs). "
+                              f"Entrando en REPOSO por {rest_mins} minuto(s) para Job #{job_id}...")
+
+                        with sent_lock:
+                            c_sent = sent_count_holder[0]
+                            c_err  = error_count_holder[0]
+                            c_idx  = contact_idx_holder[0]
+                        progress_pct = int((c_idx / total_contacts) * 100) if total_contacts > 0 else 0
+
+                        db.update_automation_job_status(
+                            job_id, "running",
+                            sent=c_sent, errors=c_err, progress=progress_pct,
+                            notes=f"⏳ En reposo ({rest_mins} min). {c_sent}/{total_contacts} enviados."
+                        )
+
+                        # Esperar tiempo de reposo de forma interrumpible
+                        rest_seconds = max(1, rest_mins * 60)
+                        start_rest_time = time.time()
+                        while time.time() - start_rest_time < rest_seconds:
+                            if self.job_stop_flags.get(job_id, False):
+                                break
+                            c_job = db.get_automation_job(job_id)
+                            if not c_job or c_job.get("status") in ("paused", "pausing", "completed", "error"):
+                                break
+                            time.sleep(2.0)
+
+                        if self.job_stop_flags.get(job_id, False):
+                            break
+
+                        # Reiniciar contadores de sesión para permitir un nuevo ciclo de envíos
+                        with sent_lock:
+                            exhausted_accounts.clear()
+                            for acc in account_ids:
+                                sent_in_session[acc] = 0
+
+                        print(f"[AutomationEngine] 🔄 Reposo completado para Job #{job_id}. Reanudando envíos con {len(valid_remaining)} cuenta(s)...")
+                        continue
 
                 # ── Abrir nuevos slots hasta target_count ────────────────────────────
                 target_count = min(acc_sending_count, len(eligible) + len(active_burst_threads))
