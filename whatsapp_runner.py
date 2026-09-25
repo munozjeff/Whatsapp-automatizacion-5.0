@@ -966,127 +966,35 @@ class WhatsAppRunner:
                             num_salidas = self._contar_mensajes_salida(page, account_id)
 
                             # ── Paso B: Leer mensajes ENTRANTES del cliente ───────────────
-                            # Estrategia basada en atributos ESTABLES de WhatsApp Web:
-                            # - data-pre-plain-text: presente en cada contenedor de burbuja, indica el remitente y hora
-                            # - copyable-text: presente en el span interior con el texto del mensaje
-                            # Los data-id con prefijo "false_" son mensajes RECIBIDOS (incoming)
-                            client_messages = []
-                            try:
-                                js_read_in = """() => {
-                                    const main = document.querySelector('#main');
-                                    if (!main) return [];
-                                    const res = [];
+                            # Usamos _leer_mensajes_reales_cliente() que busca la última salida propia
+                            # y extrae ÚNICAMENTE las burbujas entrantes del cliente (div.message-in / data-id^="false_")
+                            client_messages = self._leer_mensajes_reales_cliente(page, account_id)
 
-                                    // MÉTODO 1 (más fiable): burbujas con data-pre-plain-text que contengan el número/remitente
-                                    // En WhatsApp Web, data-pre-plain-text tiene el formato: "[HH:MM, DD/MM/YYYY] Nombre: "
-                                    // Los mensajes PROPIOS (outgoing) tienen data-pre-plain-text con el nombre de la cuenta
-                                    // Los mensajes RECIBIDOS tienen data-pre-plain-text con el nombre del contacto
-                                    // Adicionalmente, los contenedores de burbuja recibida tienen data-id con prefijo "false_"
+                            # ── Fallback 1: Vista previa del panel lateral (capturada antes del clic) ──
+                            if not client_messages and row_snippet and len(row_snippet.strip()) > 1:
+                                client_messages = [row_snippet.strip()]
+                                print(f"[{account_id}] ℹ️ Fallback row_snippet para '{chat_name}': '{row_snippet}'")
 
-                                    const allBubbles = Array.from(main.querySelectorAll('[data-pre-plain-text]'));
-                                    allBubbles.forEach(bubble => {
-                                        const pre = bubble.getAttribute('data-pre-plain-text') || '';
-                                        // Determinar si es mensaje RECIBIDO: buscar si el contenedor padre tiene data-id
-                                        const container = bubble.closest('[data-id]') || bubble;
-                                        const dataId = container.getAttribute('data-id') || '';
-                                        // data-id "false_xxx" → recibido, "true_xxx" → enviado por nosotros
-                                        const isIncoming = dataId.startsWith('false_');
-                                        if (!isIncoming && dataId) return; // saltar mensajes enviados
-
-                                        // Extraer hora del data-pre-plain-text
-                                        const tsMatch = pre.match(/\\[(\\d{1,2}:\\d{2}[^\\]]*?)\\]/);
-                                        const ts = tsMatch ? tsMatch[1].trim() : '';
-
-                                        // Extraer texto por copyable-text (el más confiable en WhatsApp Web)
-                                        let txt = '';
-                                        const copyableEl = bubble.querySelector('[copyable-text]');
-                                        if (copyableEl) {
-                                            txt = (copyableEl.innerText || copyableEl.textContent || '').trim();
-                                        }
-
-                                        // Fallback: selectable-text
-                                        if (!txt) {
-                                            const selEl = bubble.querySelector('span.selectable-text, span[class*="selectable"]');
-                                            if (selEl) txt = (selEl.innerText || selEl.textContent || '').trim();
-                                        }
-
-                                        // Fallback: data-lexical-text
-                                        if (!txt) {
-                                            const lexEl = bubble.querySelector('[data-lexical-text="true"]');
-                                            if (lexEl) txt = (lexEl.innerText || '').trim();
-                                        }
-
-                                        // Fallback: detectar contenido multimedia
-                                        if (!txt) {
-                                            if (bubble.querySelector('audio, [data-testid*="audio"]')) txt = '[Audio]';
-                                            else if (bubble.querySelector('[data-testid*="image"], img[src*="blob:"]')) txt = '[Imagen]';
-                                            else if (bubble.querySelector('[data-testid*="video"], video')) txt = '[Video]';
-                                            else if (bubble.querySelector('[data-testid*="document"]')) txt = '[Documento]';
-                                            else if (bubble.querySelector('[data-testid*="sticker"]')) txt = '[Sticker]';
-                                        }
-
-                                        // Último recurso: innerText del bubble completo sin timestamps
-                                        if (!txt) {
-                                            txt = (bubble.innerText || '').replace(/\\d{1,2}:\\d{2}(\\s?[ap]\\.?\\s?m\\.?)?/gi, '').trim();
-                                        }
-
-                                        if (txt && txt.length > 0) {
-                                            res.push(ts ? `[${ts}] ${txt}` : txt);
-                                        }
-                                    });
-
-                                    // MÉTODO 2 (fallback si no hay data-pre-plain-text): data-id con prefijo false_
-                                    if (res.length === 0) {
-                                        const byDataId = Array.from(main.querySelectorAll('div[data-id^="false_"]'));
-                                        byDataId.forEach(el => {
-                                            let txt = '';
-                                            const c = el.querySelector('[copyable-text]');
-                                            if (c) txt = (c.innerText || c.textContent || '').trim();
-                                            if (!txt) {
-                                                const s = el.querySelector('span.selectable-text');
-                                                if (s) txt = (s.innerText || '').trim();
-                                            }
-                                            if (txt && txt.length > 0) res.push(txt);
-                                        });
-                                    }
-
-                                    return res;
-                                }"""
-                                client_messages = page.evaluate(js_read_in) or []
-                                if client_messages:
-                                    print(f"[{account_id}] ✅ Extracción JS exitosa: {len(client_messages)} mensajes")
-                            except Exception as read_err:
-                                print(f"[{account_id}] ⚠️ Error extracción JS de '{chat_name}': {read_err}")
-                                client_messages = []
-
-                            # ── Fallback 1: Vista previa del panel lateral (ya capturada antes del clic) ──
-                            if not client_messages:
-                                if row_snippet and len(row_snippet.strip()) > 1:
-                                    client_messages = [row_snippet.strip()]
-                                    print(f"[{account_id}] ℹ️ Fallback row_snippet para '{chat_name}': '{row_snippet}'")
-
-                            # ── Fallback 2: Playwright locator sobre el panel #main visible ──────────────
+                            # ── Fallback 2: Playwright locator sobre div.message-in (estrictamente entrantes) ──
                             if not client_messages:
                                 try:
                                     fallback_locs = page.locator(
-                                        '#main [copyable-text], #main span.selectable-text'
+                                        '#main div.message-in [copyable-text], #main div.message-in span.selectable-text, #main div[class*="message-in"] [copyable-text]'
                                     ).all()
                                     for loc in fallback_locs:
                                         try:
                                             t = (loc.inner_text(timeout=300) or '').strip()
-                                            if t and len(t) > 1:
+                                            if t and len(t) > 1 and t not in client_messages:
                                                 client_messages.append(t)
                                         except Exception:
                                             pass
                                     if client_messages:
-                                        print(f"[{account_id}] ℹ️ Fallback Playwright locator: {len(client_messages)} textos")
+                                        print(f"[{account_id}] ℹ️ Fallback Playwright locator entrante: {len(client_messages)} textos")
                                 except Exception:
                                     pass
 
-                            # ── Fallback final: nombre del chat como último recurso ────────────────────
                             if not client_messages:
-                                client_messages = [f"Mensaje recibido de {chat_name}"]
-                                print(f"[{account_id}] ⚠️ No se extrajeron mensajes para '{chat_name}', usando fallback genérico")
+                                print(f"[{account_id}] ⚠️ No se detectaron mensajes entrantes reales del cliente en '{chat_name}'")
 
                             print(f"[{account_id}] 📨 {len(client_messages)} msg(s) entrante(s) de '{chat_name}': {client_messages}")
 
@@ -1261,74 +1169,73 @@ class WhatsAppRunner:
 
     def _leer_mensajes_reales_cliente(self, page: Page, account_id: str) -> list:
         """
-        Lee los mensajes REALES del cliente en el chat abierto, filtrando ruido.
-
-        Algoritmo (inspirado en MKT/whatsapp_monitor_service.py):
-          1. Recorre las filas del DOM de abajo hacia arriba para hallar el
-             ÚLTIMO mensaje de salida (tail-out / aria-label="Tú:").
-          2. Extrae la hora de ese mensaje desde data-pre-plain-text o span[dir='auto'].
-          3. Luego recorre DE NUEVO de abajo hacia arriba capturando mensajes
-             ENTRANTES que están POR DEBAJO de ese mensaje de salida.
-          4. FILTROS para descartar ruido:
-             - Auto-respuesta WhatsApp: hora_entrada == hora_salida AND len(texto) <= 70
-             - Plantilla empresa larga: len(texto) >= 200
-          5. Si no se encontró ningún mensaje de salida, retorna hasta los últimos 5
-             mensajes entrantes disponibles (caso: chat completamente nuevo).
-
-        Returns:
-            Lista de strings con los mensajes reales del cliente, en orden cronológico.
+        Lee los mensajes REALES del cliente en el chat abierto, filtrando estrictamente los mensajes propios de salida.
         """
         try:
-            print(f"[{account_id}] Leyendo mensajes reales del cliente en chat abierto...")
+            print(f"[{account_id}] 🔍 Leyendo mensajes reales del cliente en chat abierto...")
+            time.sleep(0.4)
 
-            # Esperar que los mensajes carguen
-            time.sleep(0.5)
-
-            # Extraer filas del DOM via JavaScript para máxima velocidad y compatibilidad
             filas_data = page.evaluate("""() => {
-                const filas = Array.from(document.querySelectorAll('div[role="row"]'));
+                const mainEl = document.querySelector('#main');
+                if (!mainEl) return [];
+                const filas = Array.from(mainEl.querySelectorAll('div[role="row"]'));
                 return filas.map(fila => {
-                    // Determinar si es salida (tail-out o aria-label "Tú:")
+                    // Determinar si es mensaje de salida enviado por nosotros
                     const hasTailOut = !!fila.querySelector('[data-testid="tail-out"]');
-                    const hasAriaYo  = !!fila.querySelector('span[aria-label="Tú:"]');
-                    const hasOut     = !!fila.querySelector('div.message-out');
+                    const hasAriaYo  = !!fila.querySelector('span[aria-label*="Tú:"], span[aria-label*="You:"]');
+                    const hasOut     = !!fila.querySelector('div.message-out') || !!fila.querySelector('div[class*="message-out"]') || !!fila.querySelector('[data-id^="true_"]');
                     const esSalida   = hasTailOut || hasAriaYo || hasOut;
 
-                    // Determinar si es entrada (tail-in)
+                    // Determinar si es mensaje de entrada enviado por el cliente
                     const hasTailIn  = !!fila.querySelector('[data-testid="tail-in"]');
-                    const hasIn      = !!fila.querySelector('div.message-in');
-                    const esEntrada  = hasTailIn || hasIn;
+                    const hasIn      = !!fila.querySelector('div.message-in') || !!fila.querySelector('div[class*="message-in"]') || !!fila.querySelector('[data-id^="false_"]');
+                    const esEntrada  = (hasTailIn || hasIn) && !esSalida;
 
-                    // Extraer hora desde data-pre-plain-text (formato "[HH:MM, DD/MM/YYYY] Nombre: ")
+                    // Extraer timestamp desde data-pre-plain-text (formato "[HH:MM, DD/MM/YYYY] Nombre: ")
                     let hora = '';
-                    const copyable = fila.querySelector('div.copyable-text[data-pre-plain-text]');
+                    const copyable = fila.querySelector('[data-pre-plain-text]');
                     if (copyable) {
                         const pre = copyable.getAttribute('data-pre-plain-text') || '';
-                        const m = pre.match(/(\\d{1,2}:\\d{2})/);
-                        if (m) hora = m[1];
+                        const m = pre.match(/\\[([^\\]]+)\\]/);
+                        if (m) hora = m[1].trim();
                     }
-                    // Fallback: span con hora visible
                     if (!hora) {
-                        const spanHora = fila.querySelector("span[dir='auto'].x1c4vz4f");
+                        const spanHora = fila.querySelector("span[dir='auto'].x1c4vz4f, span[class*='x1c4vz4f'], span[data-testid='msg-meta']");
                         if (spanHora) {
                             const m2 = (spanHora.textContent || '').match(/(\\d{1,2}:\\d{2})/);
                             if (m2) hora = m2[1];
                         }
                     }
 
-                    // Extraer texto
+                    // Extraer texto del mensaje
                     let texto = '';
-                    const selTexto = [
-                        'span[data-testid="selectable-text"]',
-                        'span.copyable-text',
-                        'div.copyable-text'
-                    ];
-                    for (const sel of selTexto) {
-                        const el = fila.querySelector(sel);
-                        if (el && el.textContent.trim()) {
-                            texto = el.textContent.trim();
-                            break;
+                    const copyableEl = fila.querySelector('[copyable-text]');
+                    if (copyableEl) {
+                        texto = (copyableEl.innerText || copyableEl.textContent || '').trim();
+                    }
+                    if (!texto) {
+                        const selTexto = [
+                            'span[data-testid="selectable-text"]',
+                            'span.selectable-text',
+                            'span.copyable-text',
+                            'div.copyable-text',
+                            '[data-lexical-text="true"]'
+                        ];
+                        for (const sel of selTexto) {
+                            const el = fila.querySelector(sel);
+                            if (el && el.textContent.trim()) {
+                                texto = el.textContent.trim();
+                                break;
+                            }
                         }
+                    }
+
+                    if (!texto) {
+                        if (fila.querySelector('audio, [data-testid*="audio"]')) texto = '[Audio]';
+                        else if (fila.querySelector('[data-testid*="image"], img[src*="blob:"]')) texto = '[Imagen]';
+                        else if (fila.querySelector('[data-testid*="video"], video')) texto = '[Video]';
+                        else if (fila.querySelector('[data-testid*="document"]')) texto = '[Documento]';
+                        else if (fila.querySelector('[data-testid*="sticker"]')) texto = '[Sticker]';
                     }
 
                     return { esSalida, esEntrada, hora, texto };
@@ -1336,33 +1243,31 @@ class WhatsAppRunner:
             }""")
 
             if not filas_data:
-                print(f"[{account_id}] No se encontraron filas en el chat.")
+                print(f"[{account_id}] ⚠️ No se encontraron filas de conversación en #main")
                 return []
 
             MAX_SIN_SALIDA = 5
             hora_ultimo_salida = ""
             idx_ultimo_salida = -1
 
-            # Paso 1: Encontrar el índice y hora del ÚLTIMO mensaje de salida
+            # Paso 1: Encontrar el índice del ÚLTIMO mensaje de salida enviado por nosotros
             for i in range(len(filas_data) - 1, -1, -1):
                 fila = filas_data[i]
                 if fila.get("esSalida"):
                     hora_ultimo_salida = fila.get("hora", "")
                     idx_ultimo_salida = i
-                    print(f"[{account_id}] 🕐 Último mensaje enviado en fila {i}, hora='{hora_ultimo_salida}'")
+                    print(f"[{account_id}] 🕐 ÚLTIMO mensaje propio enviado en fila {i} (hora='{hora_ultimo_salida}')")
                     break
 
-            # Paso 2: Capturar mensajes entrantes POSTERIORES al de salida
+            # Paso 2: Capturar mensajes ENTRANTES del cliente posteriores al último mensaje de salida
             mensajes_nuevos = []
             for i in range(len(filas_data) - 1, -1, -1):
-                # Detener al llegar al mensaje de salida (o antes si no hay ninguno)
                 if i == idx_ultimo_salida:
-                    print(f"[{account_id}] ⛔ Llegado al último mensaje de salida. Deteniendo.")
+                    print(f"[{account_id}] ⛔ Alcanzado el último mensaje propio en fila {i}. Deteniendo lectura posterior.")
                     break
 
-                # Si no hay mensaje de salida, limitar a 5 últimos
                 if idx_ultimo_salida == -1 and len(mensajes_nuevos) >= MAX_SIN_SALIDA:
-                    print(f"[{account_id}] Límite de {MAX_SIN_SALIDA} mensajes sin salida alcanzado.")
+                    print(f"[{account_id}] ⚠️ Chat sin mensajes propios: alcanzado límite de {MAX_SIN_SALIDA} mensajes de cliente.")
                     break
 
                 fila = filas_data[i]
@@ -1378,10 +1283,8 @@ class WhatsAppRunner:
                 etiqueta = f"[{hora_entrada}] {texto}" if hora_entrada else texto
                 mensajes_nuevos.append(etiqueta)
 
-            # Invertir para orden cronológico (más antiguo primero)
             mensajes_nuevos.reverse()
-
-            print(f"[{account_id}] 📩 {len(mensajes_nuevos)} mensaje(s) real(es) del cliente encontrado(s).")
+            print(f"[{account_id}] 📩 {len(mensajes_nuevos)} mensaje(s) ENTRANTE(S) REAL(ES) del cliente extraído(s).")
             return mensajes_nuevos
 
         except Exception as e:
