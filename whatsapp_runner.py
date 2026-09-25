@@ -1603,8 +1603,8 @@ class WhatsAppRunner:
                 except Exception:
                     page.goto(target_url, wait_until="domcontentloaded")
                 
-                # Espera activa de hasta 20s para dar tiempo a WhatsApp Web de resolver el SPA y abrir el compose box
-                deadline_url = time.time() + 20
+                # Espera activa de hasta 10s para dar tiempo a WhatsApp Web de resolver el SPA y abrir el compose box
+                deadline_url = time.time() + 10
                 while time.time() < deadline_url:
                     if page.is_closed():
                         break
