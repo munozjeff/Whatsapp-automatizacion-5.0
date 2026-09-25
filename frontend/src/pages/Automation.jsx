@@ -317,10 +317,10 @@ export default function Automation({ activeTab }) {
   };
 
   const terminateJob = async (jobId) => {
-    // Actualización optimista inmediata
+    // Actualización optimista inmediata a 'paused'
     setJobs((prevJobs) =>
       prevJobs.map((j) =>
-        j.id === jobId ? { ...j, status: 'stopping' } : j
+        j.id === jobId ? { ...j, status: 'paused' } : j
       )
     );
     try {
@@ -346,16 +346,22 @@ export default function Automation({ activeTab }) {
 
   const executeDeleteJob = async () => {
     if (!deletingJobId) return;
+    const targetId = deletingJobId;
+    setDeletingJobId(null);
+    // Eliminación optimista inmediata en la UI
+    setJobs((prevJobs) => prevJobs.filter((j) => j.id !== targetId));
     try {
-      const res = await fetch(`/api/automation/jobs/${deletingJobId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/automation/jobs/${targetId}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.status === 'success') {
         addToast(data.message, 'success');
-        setDeletingJobId(null);
-        fetchAll();
+      } else {
+        addToast(data.message || 'Error eliminando el job.', 'error');
       }
+      fetchAll();
     } catch (err) {
       addToast('Error eliminando el job.', 'error');
+      fetchAll();
     }
   };
 
